@@ -16,21 +16,103 @@ import warnings
 warnings.filterwarnings('ignore')
 
 class StockSelector:
-    """股票选择器类"""
+    """股票选择器类 - 集成基本面数据缓存"""
     
     def __init__(self):
         self.stocks_data = {}
         self.results = {}
         self.cache_dir = 'cache'
         self.stock_list_cache = os.path.join(self.cache_dir, 'stockA_list.csv')
-        self.fundamentals_cache = os.path.join(self.cache_dir, 'stock_fundamentals.csv')
+        self.fundamentals_cache = os.path.join(self.cache_dir, 'stockA_fundamentals.csv')  # 使用all_a_share_cache的缓存
         
         # 创建缓存目录
         if not os.path.exists(self.cache_dir):
             os.makedirs(self.cache_dir)
+    
+    def load_cached_fundamentals(self):
+        """从all_a_share_cache.py缓存加载基本面数据"""
+        cache_file = self.fundamentals_cache
         
+        if not os.path.exists(cache_file):
+            print("❌ 未找到基本面数据缓存，请先运行 all_a_share_cache.py")
+            return None
+        
+        try:
+            # 读取缓存的基本面数据
+            df = pd.read_csv(cache_file)
+            
+            # 标准化列名以适配选股策略
+            column_mapping = {
+                'code': 'code',
+                'name': 'name',
+                'current_price': 'price',
+                'market_cap': 'market_cap',
+                'pe_ttm': 'pe',
+                'pb': 'pb',
+                'roe': 'roe',
+                'debt_ratio': 'debt_ratio',
+                'revenue_growth': 'revenue_growth',
+                'profit_growth': 'profit_growth',
+                'eps': 'eps',
+                'gross_margin': 'gross_margin',
+                'net_margin': 'net_profit_margin',
+                'current_ratio': 'current_ratio'
+            }
+            
+            # 重命名存在的列
+            available_columns = {}
+            for old_name, new_name in column_mapping.items():
+                if old_name in df.columns:
+                    available_columns[old_name] = new_name
+            
+            df = df.rename(columns=available_columns)
+            
+            # 确保必需字段存在
+            required_fields = ['code', 'name', 'price', 'market_cap', 'pe', 'pb', 'roe']
+            missing_fields = [f for f in required_fields if f not in df.columns]
+            
+            if missing_fields:
+                print(f"⚠️ 缓存数据缺少字段: {missing_fields}")
+                return None
+            
+            # 数据清理
+            df = df.dropna(subset=['pe', 'pb', 'roe'])
+            df = df[(df['pe'] > 0) & (df['pb'] > 0) & (df['roe'] > 0)]
+            
+            # 转换数据类型
+            numeric_columns = ['price', 'market_cap', 'pe', 'pb', 'roe', 'debt_ratio', 
+                             'revenue_growth', 'profit_growth', 'eps', 'gross_margin', 
+                             'net_profit_margin', 'current_ratio']
+            
+            for col in numeric_columns:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
+            
+            print(f"✅ 成功加载缓存基本面数据: {len(df)} 只股票")
+            return df
+            
+        except Exception as e:
+            print(f"❌ 加载缓存数据失败: {e}")
+            return None
+    
     def get_all_a_stock_list(self):
-        """获取A股股票列表，支持缓存机制"""
+        """获取A股股票列表，优先使用缓存"""
+        # 检查基本面缓存中是否已有股票列表
+        if os.path.exists(self.fundamentals_cache):
+            try:
+                df = pd.read_csv(self.fundamentals_cache)
+                if 'code' in df.columns and 'name' in df.columns:
+                    stock_list = df[['code', 'name']].copy()
+                    print(f"📊 从基本面缓存获取股票列表: {len(stock_list)} 只股票")
+                    return stock_list
+            except Exception as e:
+                print(f"⚠️ 从缓存获取股票列表失败: {e}")
+        
+        # 回退到原来的获取方式
+        return self._get_stock_list_from_network()
+    
+    def _get_stock_list_from_network(self):
+        """从网络获取A股股票列表（备用方案）"""
         # 检查缓存文件是否存在且在一周内
         if os.path.exists(self.stock_list_cache):
             file_time = datetime.fromtimestamp(os.path.getmtime(self.stock_list_cache))
@@ -63,201 +145,47 @@ class StockSelector:
         return stock_data
     
     def get_stock_fundamentals(self, stock_list):
-        """从多个数据源获取真实有效的基本面数据，支持缓存机制"""
+        """重写：直接使用all_a_share_cache.py的缓存数据"""
+        print("🔄 使用all_a_share_cache.py缓存的基本面数据...")
         
-        # 检查基本面数据缓存
-        if os.path.exists(self.fundamentals_cache):
-            file_time = datetime.fromtimestamp(os.path.getmtime(self.fundamentals_cache))
-            if datetime.now() - file_time < timedelta(days=7):
-                print("📂 从缓存加载基本面数据...")
-                try:
-                    cached_data = pd.read_csv(self.fundamentals_cache)
-                    if not cached_data.empty and len(cached_data) > 10:
-                        return cached_data
-                except Exception as e:
-                    print(f"⚠️ 缓存文件读取失败，重新获取: {e}")
+        # 尝试从缓存加载
+        cached_data = self.load_cached_fundamentals()
+        if cached_data is not None:
+            return cached_data
         
-        fundamentals = []
-        
-        print("📊 启动多数据源股票数据获取系统...")
-        
-        # 数据源配置 - 优化列名处理
-        data_sources = [
-            {
-                "name": "东方财富实时行情", 
-                "func": ak.stock_zh_a_spot_em, 
-                "cols_mapping": {'代码': 'code', '名称': 'name', '最新价': 'price', '总市值': 'market_cap'}
-            },
-            {
-                "name": "新浪实时行情", 
-                "func": ak.stock_zh_a_spot, 
-                "cols_mapping": {'代码': 'code', '名称': 'name', '最新价': 'price', '市值': 'market_cap'}
-            }
-        ]
-        
-        stock_info = None
-        
-        # 尝试多个数据源获取基础股票信息
-        for source in data_sources:
-            try:
-                print(f"🔄 尝试 {source['name']}...")
-                data = source["func"]()
-                if not data.empty and len(data) > 50:
-                    # 智能列名匹配
-                    available_cols = set(data.columns)
-                    target_cols = list(source["cols_mapping"].keys())
-                    found_cols = [col for col in target_cols if col in available_cols]
-                    
-                    if len(found_cols) >= 3:  # 至少找到3个关键列
-                        stock_info = data[found_cols].copy()
-                        # 重命名列
-                        rename_map = {k: v for k, v in source["cols_mapping"].items() if k in found_cols}
-                        stock_info = stock_info.rename(columns=rename_map)
-                        
-                        # 补充缺失列
-                        for col in ['code', 'name', 'price', 'market_cap']:
-                            if col not in stock_info.columns:
-                                stock_info[col] = 0
-                        
-                        print(f"✅ {source['name']} 成功获取 {len(stock_info)} 只股票")
-                        break
-            except Exception as e:
-                print(f"❌ {source['name']} 失败: {str(e)[:50]}...")
-                continue
-        
-        # 如果实时数据获取失败，直接返回空数据
-        if stock_info is None or stock_info.empty:
-            print("❌ 实时数据获取失败，无有效数据可用")
-            return pd.DataFrame()
-        
-        # 财务数据源配置 - 扩展更多财务指标
-        finance_sources = [
-            {"name": "同花顺财务摘要", "func": ak.stock_financial_abstract_ths},
-            {"name": "东方财富财务指标", "func": lambda code: ak.stock_financial_analysis_indicator(symbol=code, indicator="年度")},
-            {"name": "东方财富财务摘要", "func": lambda code: ak.stock_financial_analysis_indicator(symbol=code, indicator="按年度")}
-        ]
-
-        # 分批处理股票，支持断点续传和数量限制
-        batch_size = int(os.getenv('BATCH_SIZE', 50))  # 每批处理的股票数量
-        max_stocks = int(os.getenv('MAX_STOCKS', 0))  # 0表示处理所有股票
-        total_stocks = len(stock_info)
-        
-        if max_stocks > 0:
-            total_stocks = min(max_stocks, total_stocks)
-            stock_info = stock_info.head(total_stocks)
-        
-        print(f"📈 开始分批获取财务数据，共 {total_stocks} 只股票，每批{batch_size}只...")
-        
-        # 检查是否有断点续传文件
-        checkpoint_file = os.path.join(self.cache_dir, 'fundamentals_checkpoint.json')
-        processed_codes = set()
-        
-        if os.path.exists(checkpoint_file):
-            try:
-                with open(checkpoint_file, 'r', encoding='utf-8') as f:
-                    checkpoint_data = json.load(f)
-                    processed_codes = set(checkpoint_data.get('processed_codes', []))
-                    print(f"📂 从断点续传，已处理 {len(processed_codes)} 只股票")
-            except Exception as e:
-                print(f"⚠️ 断点文件读取失败，重新开始: {e}")
-        
-        # 过滤掉已处理的股票
-        remaining_stocks = stock_info[~stock_info['code'].isin(processed_codes)]
-        total_batches = (len(remaining_stocks) + batch_size - 1) // batch_size
-        
-        for batch_idx in range(total_batches):
-            start_idx = batch_idx * batch_size
-            end_idx = min((batch_idx + 1) * batch_size, len(remaining_stocks))
-            batch_stocks = remaining_stocks.iloc[start_idx:end_idx]
-            
-            print(f"\n🔄 处理第 {batch_idx + 1}/{total_batches} 批 ({start_idx + 1}-{end_idx} 只股票)")
-            
-            batch_fundamentals = []
-            
-            for idx, (_, stock) in enumerate(batch_stocks.iterrows()):
-                try:
-                    code = str(stock.get('code', '')).strip()
-                    if not code or len(code) < 6:
-                        continue
-                    
-                    finance_data = {
-                        'code': code,
-                        'name': str(stock.get('name', f'股票{code}')).strip(),
-                        'price': float(stock.get('price', 0)) if pd.notna(stock.get('price')) else np.random.uniform(5, 100),
-                        'market_cap': float(stock.get('market_cap', 0)) if pd.notna(stock.get('market_cap')) else np.random.uniform(100, 5000),
-                        'pe': np.nan,  # 市盈率（静）
-                        'pe_ttm': np.nan,  # 市盈率（TTM）
-                        'pb': np.nan,  # 市净率
-                        'roe': np.nan,  # 净资产收益率
-                        'debt_ratio': np.nan,  # 资产负债率
-                        'revenue_growth': np.nan,  # 营收增长率
-                        'profit_growth': np.nan,  # 净利润增长率
-                        'eps': np.nan,  # 每股收益
-                        'gross_margin': np.nan,  # 毛利率
-                        'current_ratio': np.nan,  # 流动比率
-                        'net_profit_margin': np.nan  # 净利润率
-                    }
-                    
-                    # 尝试多个财务数据源
-                    for finance_source in finance_sources:
-                        try:
-                            if finance_source["name"] == "同花顺财务摘要":
-                                finance = finance_source["func"](symbol=code)
-                            else:
-                                finance = finance_source["func"](code)
-                            
-                            if finance is not None and not finance.empty:
-                                self._extract_finance_data(finance_data, finance)
-                                
-                                # 检查是否获取到足够数据
-                                if self._validate_stock_data(finance_data):
-                                    break
-                                    
-                        except Exception as e:
-                            continue
-                    
-                    # 验证数据有效性
-                    if self._validate_stock_data(finance_data):
-                        batch_fundamentals.append(finance_data)
-                        processed_codes.add(code)
-                        
-                        # 实时保存进度
-                        if len(processed_codes) % 50 == 0:
-                            self._save_checkpoint(processed_codes, checkpoint_file)
-                            print(f"💾 已处理 {len(processed_codes)} 只股票，进度已保存")
-                    
-                except Exception as e:
-                    continue
-            
-            # 合并批处理结果
-            fundamentals.extend(batch_fundamentals)
-            
-            # 每批完成后保存进度
-            self._save_checkpoint(processed_codes, checkpoint_file)
-            
-            # 短暂休息，避免API限制
-            if batch_idx < total_batches - 1:
-                time.sleep(2)
-        
-        # 清理断点文件
-        if os.path.exists(checkpoint_file):
-            os.remove(checkpoint_file)
-            print("🧹 断点文件已清理")
-        
-        # 保存完整缓存
-        if fundamentals:
-            result_df = pd.DataFrame(fundamentals)
-            result_df.to_csv(self.fundamentals_cache, index=False, encoding='utf-8')
-            print(f"💾 完整基本面数据已缓存到 {self.fundamentals_cache} ({len(result_df)}条数据)")
-            return result_df
-        
-        print("❌ 未能获取有效数据")
+        print("❌ 缓存数据不可用，请先运行: python3 all_a_share_cache.py")
         return pd.DataFrame()
     
-
-    
-
-    
+    def check_cache_integrity(self):
+        """检查缓存数据完整性"""
+        cache_file = self.fundamentals_cache
+        
+        if not os.path.exists(cache_file):
+            print("❌ 未找到基本面数据缓存")
+            return False
+        
+        try:
+            df = pd.read_csv(cache_file)
+            
+            # 检查必需字段
+            required_fields = ['code', 'name', 'current_price', 'market_cap', 'pe_ttm', 'pb', 'roe']
+            missing_fields = [f for f in required_fields if f not in df.columns]
+            
+            if missing_fields:
+                print(f"❌ 缓存数据不完整，缺少: {missing_fields}")
+                return False
+            
+            if len(df) < 10:
+                print(f"❌ 缓存数据量过少: {len(df)} 只股票")
+                return False
+            
+            print(f"✅ 缓存数据完整: {len(df)} 只股票，{len(df.columns)} 个字段")
+            return True
+            
+        except Exception as e:
+            print(f"❌ 缓存数据检查失败: {e}")
+            return False
+        
     def _extract_finance_data(self, finance_data, finance_df):
         """从财务数据中提取关键指标，包括扩展的财务指标"""
         try:
@@ -374,18 +302,26 @@ class StockSelector:
     
     def quality_strategy(self, df):
         """质量投资策略：高ROE+低负债+现金流好"""
+        # 使用debt_ratio作为负债指标，如果没有current_ratio，使用debt_ratio的反向指标
+        debt_ratio_col = 'debt_ratio' if 'debt_ratio' in df.columns else None
+        
         conditions = (
             (df['roe'] > 20) &  # 净资产收益率高
             (df['debt_ratio'] < 40) &  # 低负债
-            (df['current_ratio'] > 1.5) &  # 流动比率高
             (df['profit_growth'] > 0) &  # 正增长
             (df['pe'] > 0)  # 市盈率正常
         )
         
         selected = df[conditions].copy()
         selected['strategy'] = '质量投资'
-        selected['reason'] = '高ROE+低负债+现金流好'
-        selected['score'] = df['roe'] * 0.5 + (100-df['debt_ratio']) * 0.3 + df['current_ratio'] * 0.2
+        selected['reason'] = '高ROE+低负债+稳定增长'
+        
+        # 质量评分：ROE权重50%，低负债权重30%，增长权重20%
+        selected['score'] = (
+            df['roe'] * 0.5 + 
+            (100 - df['debt_ratio']) * 0.3 + 
+            df['profit_growth'].fillna(0) * 0.2
+        )
         
         return selected.sort_values('score', ascending=False).head(10)
     
@@ -559,10 +495,10 @@ def main():
         for strategy, count in strategy_summary.items():
             print(f"   • {strategy}: {count} 只股票")
         
-        print("\n✅ 结果已保存到:")
-        print("   • selected_stocks.md (Markdown格式)")
-        print("   • selected_stocks.csv (CSV格式)")
-        print("   • selected_stocks.json (JSON格式股票代码列表)")
+        print("\n✅ 结果已保存到 result/ 目录:")
+        print("   • result/result_selected_stocks.md (Markdown格式)")
+        print("   • result/result_selected_stocks.csv (CSV格式)")
+        print("   • result/result_selected_stocks.json (JSON格式股票代码列表)")
     else:
         print("❌ 选股过程遇到问题，请检查网络连接和数据源")
 
@@ -602,8 +538,9 @@ def save_to_markdown(results):
                 md_content.append(f"- 利润增长: {stock['profit_growth']:.2f}%")
             md_content.append("")
     
-    # 写入文件
-    with open('selected_stocks.md', 'w', encoding='utf-8') as f:
+    # 写入文件到result目录
+    output_path = os.path.join('result', 'result_selected_stocks.md')
+    with open(output_path, 'w', encoding='utf-8') as f:
         f.write('\n'.join(md_content))
 
 def save_to_csv(results):
@@ -670,11 +607,12 @@ def save_to_csv(results):
     # 按综合评分降序排序
     valid_data = valid_data.sort_values('综合评分', ascending=False)
     
-    # 保存为CSV文件
-    valid_data.to_csv('selected_stocks.csv', index=False, encoding='utf_8_sig')
+    # 保存为CSV文件到result目录
+    output_path = os.path.join('result', 'result_selected_stocks.csv')
+    valid_data.to_csv(output_path, index=False, encoding='utf_8_sig')
     
     # 统计有效数据数量
-    print(f"✅ CSV格式结果已保存到 selected_stocks.csv ({len(valid_data)}条有效数据)")
+    print(f"✅ CSV格式结果已保存到 {output_path} ({len(valid_data)}条有效数据)")
 
 def save_to_json(results):
     """将股票代码和名称保存为JSON格式"""
@@ -701,11 +639,12 @@ def save_to_json(results):
             'name': str(stock['name'])
         })
     
-    # 保存为包含代码和名称的JSON文件
-    with open('selected_stocks.json', 'w', encoding='utf-8') as f:
+    # 保存为包含代码和名称的JSON文件到result目录
+    output_path = os.path.join('result', 'result_selected_stocks.json')
+    with open(output_path, 'w', encoding='utf-8') as f:
         json.dump(stock_list, f, ensure_ascii=False, indent=4)
     
-    print(f"✅ JSON格式股票代码和名称列表已保存到 selected_stocks.json ({len(stock_list)}只股票)")
+    print(f"✅ JSON格式股票代码和名称列表已保存到 {output_path} ({len(stock_list)}只股票)")
 
 if __name__ == "__main__":
     main()

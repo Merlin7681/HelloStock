@@ -1,10 +1,21 @@
 # TMP
 
 ~~~shell
+# 获取全部A股（约5000+只）
+python3 all_a_share_cache.py
+
+# 获取指定数量（如1000只）用于测试
+python3 all_a_share_cache.py --max-stocks 1000
+
+# 查看缓存数据
+head -10 cache/stockA_fundamentals.csv
+
 # A股股票基本面数据缓存系统
 bash -c python3 stock_fundamentals_cache.py
 
 ls -l cache/
+wc -l cache/stockA_list.csv
+wc -l cache/stockA_fundamentals.csv
 
 # 分析200只股票
 MAX_STOCKS=200 python3 stock_selector.py
