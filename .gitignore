@@ -185,3 +185,4 @@ cython_debug/
 
 
 stock_screeners/cache/*.json
+stock_screeners/*.json
