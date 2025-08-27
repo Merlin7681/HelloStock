@@ -13,9 +13,11 @@ head -10 cache/stockA_fundamentals.csv
 # A股股票基本面数据缓存系统
 bash -c python3 stock_fundamentals_cache.py
 
-ls -l cache/
+# 统计行数
 wc -l cache/stockA_list.csv
 wc -l cache/stockA_fundamentals.csv
+# 查看文件的前几行
+head -n 20 cache/stockA_fundamentals_eastmoney.csv
 
 # 分析200只股票
 MAX_STOCKS=200 python3 stock_selector.py

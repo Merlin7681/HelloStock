@@ -24,20 +24,80 @@
 获取真实数据，并确保获取到完整的A股股票列表，如果某些字段获取不到，可填空。
 更新日志名为stock_screeners/cache/fundamentals_update_log.json。程序名为stock_screeners/get_stockA_fundamentals.py
 
+#### 1.2.0、<font color=red>Piotroski F-Score</font>
+创建一个程序stock_screeners/get_stock_fscore.py. 它从文件（stock_screeners/cache/stockA_list.csv）中获取A股的股票列表，通过获取列表中各股票的相关数据计算它的Piotroski F-Score值，并把结果（股票名称、股票代码、股票所属行业、F-Score值及其9项财务指标）按照F-Score值进行排序，并保存到stock_screeners/cache/stockA_fscore_summary.csv。
+为避免频繁访问数据接口 导致访问被屏蔽或数据获取失败，增加必要的预防措施.
+
+***<font color=red>f_score includes:</font>***
+
+- "roa_positive"                    '资产回报率or资产收益率为正', 
+- "operating_cash_flow_positive"    '经营现金流为正', 
+- "roa_growth"                      '资产收益率增长', 
+- "cash_flow_gt_net_profit"         '经营现金流大于净利润',
+- "leverage_improved"               '杠杆改进'or'杠杆率降低',
+- "current_ratio_improved"          '流动比率提高',
+- "no_new_equity"                   '无新 equity'or'未发行新股',
+- "gross_margin_improved"           '毛利率提高',
+- "asset_turnover_improved"         '资产周转率提高'
+ROA: 平均资产回报率（Return on Average Assets，ROA）
+
+
+#### 1.2.1 eastmoney数据源
+从文件（stock_screeners/cache/stockA_list.csv）中获取A股的股票列表，并依据A股股票列表中的股票代码，从eastmoney数据源获取A股股票的真实基本面数据。基本面数据字段可依据数据源所提供的接口适当调整。本地可以保存所有A股股票的基本面数据（stock_screeners/cache/stockA_fundamentals_eastmoney.csv）。
+基本面数据必须来自真实数据。基本面数据可以分批次获取并存入stockA_fundamentals_eastmoney.csv，而不必全部获取后一起存入。如果获取中断，下次运行程序可以从中断处继续获取并保存。
+获取真实数据，并确保获取到完整的A股股票列表，如果某些字段获取不到，可删除。
+更新日志名为stock_screeners/cache/fundamentals_eastmoney_update_log.json。程序名为stock_screeners/get_stockA_fundamentals_eastmoney.py
+为避免频繁访问数据接口 导致访问被屏蔽或数据获取失败，增加必要的预防措施：比如eastmoney接口访问添加反爬机制：包括访问频率控制、随机User-Agent伪装、请求头伪装、重试机制和随机请求延迟等功能。
+
+#### 1.2.2 baostock数据源
+从文件（stock_screeners/cache/stockA_list.csv）中获取A股的股票列表，并依据A股股票列表中的股票代码，从baostock数据源获取A股股票的真实基本面数据。基本面数据字段可依据数据源所提供的接口适当调整。本地可以保存所有A股股票的基本面数据（stock_screeners/cache/stockA_fundamentals_baostock.csv）。
+基本面数据必须来自真实数据。基本面数据可以分批次获取并存入stockA_fundamentals_baostock.csv，而不必全部获取后一起存入。如果获取中断，下次运行程序可以从中断处继续获取并保存。
+获取真实数据，并确保获取到完整的A股股票列表，如果某些字段获取不到，可删除。
+更新日志名为stock_screeners/cache/fundamentals_baostock_update_log.json。程序名为stock_screeners/get_stockA_fundamentals_baostock.py
+为避免频繁访问数据接口 导致访问被屏蔽或数据获取失败，增加必要的预防措施：比如baostock函数添加访问控制策略，包括访问频率限制、随机延迟，或其他方式。
+
+#### 1.2.3 akshare数据源
+从文件（stock_screeners/cache/stockA_list.csv）中获取A股的股票列表，并依据A股股票列表中的股票代码，从akshare数据源获取A股股票的真实基本面数据。基本面数据字段可依据数据源所提供的接口适当调整。本地可以保存所有A股股票的基本面数据（stock_screeners/cache/stockA_fundamentals_akshare.csv）。
+基本面数据必须来自真实数据。基本面数据可以分批次获取并存入stockA_fundamentals_akshare.csv，而不必全部获取后一起存入。如果获取中断，下次运行程序可以从中断处继续获取并保存。
+获取真实数据，并确保获取到完整的A股股票列表，如果某些字段获取不到，可删除。
+更新日志名为stock_screeners/cache/fundamentals_akshare_update_log.json。程序名为stock_screeners/get_stockA_fundamentals_akshare.py
+避免频繁访问数据接口 导致访问被屏蔽或数据获取失败，增加必要的预防措施：比如akshare函数添加访问控制策略，包括访问频率限制、随机延迟，或其他方式。
+
+
+#### 预防措施
+为避免频繁访问数据接口 导致访问被屏蔽或数据获取失败，增加必要的预防措施：
+- eastmoney接口访问添加反爬机制：包括访问频率控制、随机User-Agent伪装、请求头伪装、重试机制和随机请求延迟等功能。
+- baostock函数添加访问控制策略，包括访问频率限制、随机延迟和使用logger记录日志。
+- akshare函数添加访问控制策略，包括访问频率限制、随机延迟和使用logger记录日志。
+
 ### 1.3、分析和筛选股票
-根据基本面数据（stock_screeners/cache/stockA_fundamentals.csv），进行策略分析和筛选，以获得优质股票（如发现现价价值被低估的股票）。
+#### 1.3.1、基于eastmoney数据源
+根据从eastmoney获取的基本面数据（保存在stock_screeners/cache/stockA_fundamentals_eastmoney.csv）进行策略分析和筛选，以获得优质股票（如发现现价价值被低估的股票）。
 根据分析结果，筛选出符合条件的股票，得到20-50支优质股票。
-将分析筛选策略和筛选结果存到本地存入stock_screeners/result目录下的result_selected.csv和result_selected.md文件中。并将选中的股票代码和股票名称存入stock_screeners/result/result_selected.json中。程序名为stock_screeners/stock_screeners.py
+将分析筛选策略和筛选结果存到本地存入stock_screeners/result目录下的result_selected_eastmoney.csv和result_selected_eastmoney.md文件中。并将选中的股票代码和股票名称存入stock_screeners/result/result_selected_eastmoney.json中。程序名为stock_screeners/stock_screeners_eastmoney.py
+
+#### 1.3.2、基于baostock数据源
+根据从baostock获取的基本面数据（保存在stock_screeners/cache/stockA_fundamentals_baostock.csv）进行策略分析和筛选，以获得优质股票（如发现现价价值被低估的股票）。
+根据分析结果，筛选出符合条件的股票，得到20-50支优质股票。
+将分析筛选策略和筛选结果存到本地存入stock_screeners/result目录下的result_selected_baostock.csv和result_selected_baostock.md文件中。并将选中的股票代码和股票名称存入stock_screeners/result/result_selected_baostock.json中。程序名为stock_screeners/stock_screeners_baostock.py
+
+### 1.3.3、基于akshare数据源
+根据从akshare获取的基本面数据（保存在stock_screeners/cache/stockA_fundamentals_akshare.csv）进行策略分析和筛选，以获得优质股票（如发现现价价值被低估的股票）。
+根据分析结果，筛选出符合条件的股票，得到20-50支优质股票。
+将分析筛选策略和筛选结果存到本地存入stock_screeners/result目录下的result_selected_akshare.csv和result_selected_akshare.md文件中。并将选中的股票代码和股票名称存入stock_screeners/result/result_selected_akshare.json中。程序名为stock_screeners/stock_screeners_akshare.py
+
 
 ### 1.4、生成代码说明
-依据stock_screeners目录中的程序，将主要逻辑、注意实现和使用说明等内容写一份说明文档文档名为（stock_screeners/screeners_guide.md）。
+依据stock_screeners目录中的程序，将主要逻辑、注意事项和使用说明等内容写一份说明文档文档名为（stock_screeners/README_screeners.md）。
 程序列表如下：
-
 - get_stockA_list.py
 - get_stockA_fundamentals.py
 - stock_screeners.py
 
+## 参考
+- [Python破解东方财富反爬机制](https://cloud.tencent.com/developer/article/2542891)
 
-## FAQ
+
+## Trae沟通技巧
 问题：自动化生成的基本面数据获取程序经常获取不到数据？
 问Trae 还有哪些开发接口 可以免费获得A股股票的基本面数据？

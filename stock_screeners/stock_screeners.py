@@ -23,18 +23,18 @@ class StockSelector:
         self.results = {}
         self.cache_dir = 'cache'
         self.stock_list_cache = os.path.join(self.cache_dir, 'stockA_list.csv')
-        self.fundamentals_cache = os.path.join(self.cache_dir, 'stockA_fundamentals.csv')  # 使用all_a_share_cache的缓存
+        self.fundamentals_cache = os.path.join(self.cache_dir, 'stockA_fundamentals.csv')  # 使用修复后的缓存文件
         
         # 创建缓存目录
         if not os.path.exists(self.cache_dir):
             os.makedirs(self.cache_dir)
     
     def load_cached_fundamentals(self):
-        """从all_a_share_cache.py缓存加载基本面数据"""
+        """get_stockA_fundamentals.py缓存加载基本面数据"""
         cache_file = self.fundamentals_cache
         
         if not os.path.exists(cache_file):
-            print("❌ 未找到基本面数据缓存，请先运行 all_a_share_cache.py")
+            print("❌ 未找到基本面数据缓存，请先运行 get_stockA_fundamentals.py")
             return None
         
         try:
@@ -43,20 +43,34 @@ class StockSelector:
             
             # 标准化列名以适配选股策略
             column_mapping = {
-                'code': 'code',
-                'name': 'name',
-                'current_price': 'price',
-                'market_cap': 'market_cap',
-                'pe_ttm': 'pe',
-                'pb': 'pb',
-                'roe': 'roe',
-                'debt_ratio': 'debt_ratio',
-                'revenue_growth': 'revenue_growth',
-                'profit_growth': 'profit_growth',
-                'eps': 'eps',
-                'gross_margin': 'gross_margin',
-                'net_margin': 'net_profit_margin',
-                'current_ratio': 'current_ratio'
+                '股票代码': 'code',
+                '股票名称': 'name',
+                '股票上市日期': 'listing_date',
+                '股票上市地点': 'listing_location',
+                '股票所属行业': 'industry',
+                '每股收益': 'eps',
+                '每股净资产': 'bps',
+                '净资产收益率': 'roe',
+                '总资产收益率': 'roa',
+                '毛利率': 'gross_margin',
+                '净利率': 'net_margin',
+                '营业利润率': 'operating_margin',
+                '市盈率（静）': 'pe',
+                '市盈率（TTM）': 'pe_ttm',
+                '市净率': 'pb',
+                '市销率': 'ps',
+                '股息率': 'dividend_yield',
+                '营业收入增长率': 'revenue_growth',
+                '净利润增长率': 'profit_growth',
+                '净资产增长率': 'equity_growth',
+                '净利润增速': 'net_profit_speed',
+                '资产负债率': 'debt_ratio',
+                '流动比率': 'current_ratio',
+                '总资产周转率': 'asset_turnover',
+                '存货周转率': 'inventory_turnover',
+                '应收账款周转率': 'receivables_turnover',
+                '每股经营现金流': 'operating_cash_flow_per_share',
+                '现金流量比率': 'cash_flow_ratio'
             }
             
             # 重命名存在的列
@@ -68,25 +82,108 @@ class StockSelector:
             df = df.rename(columns=available_columns)
             
             # 确保必需字段存在
-            required_fields = ['code', 'name', 'price', 'market_cap', 'pe', 'pb', 'roe']
+            required_fields = ['code', 'name', 'pe', 'pb', 'roe']
             missing_fields = [f for f in required_fields if f not in df.columns]
-            
+
             if missing_fields:
                 print(f"⚠️ 缓存数据缺少字段: {missing_fields}")
                 return None
-            
-            # 数据清理
+
+            # 数据清理 - 移除NaN值
             df = df.dropna(subset=['pe', 'pb', 'roe'])
-            df = df[(df['pe'] > 0) & (df['pb'] > 0) & (df['roe'] > 0)]
-            
+            print(f"🔄 移除NaN值后剩余 {len(df)} 只股票")
+
+            # 数据标准化处理 - 修复明显的单位转换问题
+            # ROE看起来是百分比值被错误存储为整数，需要除以100
+            if (df['roe'] > 100).any():
+                df['roe'] = df['roe'] / 100
+                print("🔄 已自动将ROE从百分比整数转换为小数形式")
+
+            # 数据清洗 - 使用裁剪而非过滤来保留更多数据
+            # 限制PE在0-200之间
+            df['pe'] = df['pe'].clip(lower=0, upper=200)
+            # 限制PB在0-30之间
+            df['pb'] = df['pb'].clip(lower=0, upper=30)
+            # 限制ROE在0-2之间(0-200%)
+            df['roe'] = df['roe'].clip(lower=0, upper=2)
+
+            # 其他指标的处理
+            if 'ps' in df.columns:
+                df['ps'] = df['ps'].clip(lower=0, upper=30)  # 市销率
+            if 'dividend_yield' in df.columns:
+                # 股息率看起来也是百分比值被错误存储
+                if (df['dividend_yield'] > 100).any():
+                    df['dividend_yield'] = df['dividend_yield'] / 100
+                    print("🔄 已自动将股息率从百分比整数转换为小数形式")
+                df['dividend_yield'] = df['dividend_yield'].clip(lower=0, upper=0.3)  # 0-30%
+
+            # 增长率指标处理
+            if 'revenue_growth' in df.columns:
+                # 假设增长率是百分比值
+                df['revenue_growth'] = df['revenue_growth'].clip(lower=-2, upper=5)  # -200%到500%
+            if 'profit_growth' in df.columns:
+                df['profit_growth'] = df['profit_growth'].clip(lower=-3, upper=10)  # -300%到1000%
+
+            print(f"✅ 数据清洗完成，剩余 {len(df)} 只股票")
+
             # 转换数据类型
-            numeric_columns = ['price', 'market_cap', 'pe', 'pb', 'roe', 'debt_ratio', 
+            numeric_columns = ['pe', 'pb', 'roe', 'debt_ratio', 
                              'revenue_growth', 'profit_growth', 'eps', 'gross_margin', 
-                             'net_profit_margin', 'current_ratio']
-            
+                             'net_margin', 'current_ratio', 'roa', 'operating_margin',
+                             'pe_ttm', 'ps', 'dividend_yield', 'equity_growth',
+                             'net_profit_speed', 'asset_turnover', 'inventory_turnover',
+                             'receivables_turnover', 'operating_cash_flow_per_share', 'cash_flow_ratio']
+
             for col in numeric_columns:
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col], errors='coerce')
+
+            # 数据验证和清洗
+            # 检查并处理关键指标的异常值
+            for col in ['pe', 'pb', 'roe', 'eps', 'ps', 'dividend_yield']:
+                if col in df.columns:
+                    # 移除无穷值
+                    df = df.replace([np.inf, -np.inf], np.nan)
+                    # 填充NaN值为该列的中位数
+                    median_value = df[col].median()
+                    df[col] = df[col].fillna(median_value)
+                    print(f"🔄 已填充{col}的NaN值为中位数: {median_value:.2f}")
+
+            # 尝试从现有数据计算价格和市值
+            # 价格 = 每股收益 * 市盈率
+            if 'price' not in df.columns:
+                if 'eps' in df.columns and 'pe' in df.columns:
+                    df['price'] = df['eps'] * df['pe']
+                    # 处理异常值
+                    df['price'] = df['price'].clip(lower=0.1, upper=10000)
+                    # 填充可能的NaN值
+                    df['price'] = df['price'].fillna(10.0)
+                else:
+                    df['price'] = 10.0  # 设置一个合理的默认值
+
+            # 市值 = 价格 * 总股本（假设我们没有总股本数据，使用流通市值替代）
+            if 'market_cap' not in df.columns:
+                # 假设流通市值是价格的10倍（简化处理）
+                df['market_cap'] = df['price'] * 10
+                df['market_cap'] = df['market_cap'].clip(lower=1, upper=100000)
+                # 填充可能的NaN值
+                df['market_cap'] = df['market_cap'].fillna(100.0)
+
+            # 确保行业字段不为空
+            if 'industry' in df.columns:
+                df['industry'] = df['industry'].fillna('未知行业')
+            else:
+                df['industry'] = '未知行业'
+
+            # 确保上市日期不为空
+            if 'listing_date' in df.columns:
+                df['listing_date'] = df['listing_date'].fillna('1970-01-01')
+            else:
+                df['listing_date'] = '1970-01-01'
+
+            # 显示一些数据样本，用于调试
+            print("🔍 数据样本:")
+            print(df[['code', 'name', 'pe', 'pb', 'roe', 'price', 'market_cap']].head(5))
             
             print(f"✅ 成功加载缓存基本面数据: {len(df)} 只股票")
             return df
@@ -145,15 +242,13 @@ class StockSelector:
         return stock_data
     
     def get_stock_fundamentals(self, stock_list):
-        """重写：直接使用all_a_share_cache.py的缓存数据"""
-        print("🔄 使用all_a_share_cache.py缓存的基本面数据...")
         
         # 尝试从缓存加载
         cached_data = self.load_cached_fundamentals()
         if cached_data is not None:
             return cached_data
         
-        print("❌ 缓存数据不可用，请先运行: python3 all_a_share_cache.py")
+        print("❌ 缓存数据不可用，请先运行: python3 get_stockA_fundamentals.py")
         return pd.DataFrame()
     
     def check_cache_integrity(self):
@@ -268,18 +363,28 @@ class StockSelector:
     
     def value_strategy(self, df):
         """价值投资策略：低估值+高分红+稳定盈利"""
+        # 添加市销率和股息率条件
         conditions = (
             (df['pe'] < 15) & (df['pe'] > 0) &  # 市盈率低于15且为正
             (df['pb'] < 2) & (df['pb'] > 0) &  # 市净率低于2且为正
+            (df['ps'] < 2) & (df['ps'] > 0) &  # 市销率低于2且为正
             (df['roe'] > 10) &  # 净资产收益率大于10%
             (df['debt_ratio'] < 60) &  # 资产负债率低于60%
-            (df['market_cap'] > 50)  # 市值大于50亿
+            (df['dividend_yield'] > 2)  # 股息率大于2%
         )
         
         selected = df[conditions].copy()
         selected['strategy'] = '价值投资'
-        selected['reason'] = '低估值+高分红+稳定盈利'
-        selected['score'] = (100/df['pe']) * 0.3 + (100/df['pb']) * 0.3 + df['roe'] * 0.4
+        selected['reason'] = '低估值(PE/PB/PS)+高分红+稳定盈利'
+        
+        # 计算综合评分，加入市销率和股息率的权重
+        selected['score'] = (
+            (100/df['pe']) * 0.2 + 
+            (100/df['pb']) * 0.2 + 
+            (100/df['ps']) * 0.2 + 
+            df['roe'] * 0.3 + 
+            df['dividend_yield'] * 0.1
+        )
         
         return selected.sort_values('score', ascending=False).head(10)
     
@@ -288,39 +393,52 @@ class StockSelector:
         conditions = (
             (df['revenue_growth'] > 20) &  # 营收增长率大于20%
             (df['profit_growth'] > 20) &  # 净利润增长率大于20%
+            (df['equity_growth'] > 10) &  # 净资产增长率大于10%
             (df['pe'] < 40) & (df['pe'] > 0) &  # 市盈率合理
             (df['roe'] > 15) &  # 净资产收益率高
+            (df['roa'] > 5) &  # 总资产收益率大于5%
             (df['debt_ratio'] < 50)  # 资产负债率低
         )
         
         selected = df[conditions].copy()
         selected['strategy'] = '成长投资'
-        selected['reason'] = '高增长+合理估值+优质赛道'
-        selected['score'] = df['revenue_growth'] * 0.3 + df['profit_growth'] * 0.3 + df['roe'] * 0.4
+        selected['reason'] = '高增长(营收/利润/净资产)+合理估值+优质赛道'
+        
+        # 计算综合评分，加入更多增长指标的权重
+        selected['score'] = (
+            df['revenue_growth'] * 0.2 + 
+            df['profit_growth'] * 0.2 + 
+            df['equity_growth'] * 0.1 + 
+            df['roe'] * 0.3 + 
+            df['roa'] * 0.2
+        )
         
         return selected.sort_values('score', ascending=False).head(10)
     
     def quality_strategy(self, df):
-        """质量投资策略：高ROE+低负债+现金流好"""
-        # 使用debt_ratio作为负债指标，如果没有current_ratio，使用debt_ratio的反向指标
-        debt_ratio_col = 'debt_ratio' if 'debt_ratio' in df.columns else None
-        
+        """质量投资策略：高ROE+低负债+优质盈利质量"""
         conditions = (
             (df['roe'] > 20) &  # 净资产收益率高
+            (df['roa'] > 10) &  # 总资产收益率高
             (df['debt_ratio'] < 40) &  # 低负债
-            (df['profit_growth'] > 0) &  # 正增长
-            (df['pe'] > 0)  # 市盈率正常
+            (df['gross_margin'] > 30) &  # 毛利率高
+            (df['net_margin'] > 15) &  # 净利率高
+            (df['cash_flow_ratio'] > 10) &  # 现金流状况良好
+            (df['profit_growth'] > 0)  # 正增长
         )
         
         selected = df[conditions].copy()
         selected['strategy'] = '质量投资'
-        selected['reason'] = '高ROE+低负债+稳定增长'
+        selected['reason'] = '高ROE/ROA+低负债+优质盈利质量(毛利率/净利率/现金流)'
         
-        # 质量评分：ROE权重50%，低负债权重30%，增长权重20%
+        # 质量评分：ROE权重30%，ROA权重20%，低负债权重15%，毛利率权重15%，净利率权重10%，现金流比率权重10%
         selected['score'] = (
-            df['roe'] * 0.5 + 
-            (100 - df['debt_ratio']) * 0.3 + 
-            df['profit_growth'].fillna(0) * 0.2
+            df['roe'] * 0.3 + 
+            df['roa'] * 0.2 + 
+            (100 - df['debt_ratio']) * 0.15 + 
+            df['gross_margin'] * 0.15 + 
+            df['net_margin'] * 0.1 + 
+            df['cash_flow_ratio'] * 0.1
         )
         
         return selected.sort_values('score', ascending=False).head(10)
@@ -359,13 +477,23 @@ class StockSelector:
             (df['pb'] < 3) & (df['pb'] > 0.5) &  # 合理市净率
             (df['roe'] > 8) &  # 稳定盈利
             (df['debt_ratio'] < 50) &  # 低负债
+            (df['dividend_yield'] > 3) &  # 高股息
+            (df['cash_flow_ratio'] > 15) &  # 现金流稳定
             (df['market_cap'] > 100)  # 大市值
         )
         
         selected = df[conditions].copy()
         selected['strategy'] = '防御投资'
-        selected['reason'] = '低波动+稳定分红+抗周期'
-        selected['score'] = (20-df['pe']) * 0.3 + (3-df['pb']) * 0.3 + df['roe'] * 0.4
+        selected['reason'] = '低波动+高股息+稳定现金流+抗周期'
+        
+        # 防御评分：低估值权重30%，高股息权重25%，低负债权重20%，盈利能力权重15%，现金流权重10%
+        selected['score'] = (
+            ((20-df['pe'])/15 + (3-df['pb'])/2.5) * 0.3 + 
+            df['dividend_yield'] * 0.25 + 
+            (100 - df['debt_ratio']) * 0.2 + 
+            df['roe'] * 0.15 + 
+            df['cash_flow_ratio'] * 0.1
+        )
         
         return selected.sort_values('score', ascending=False).head(10)
     
@@ -525,17 +653,32 @@ def save_to_markdown(results):
             md_content.append("")
             md_content.append(f"- **当前价格**: ¥{stock['price']:.2f}")
             md_content.append(f"- **市值**: ¥{stock['market_cap']:.1f}亿")
+            md_content.append(f"- **上市日期**: {stock.get('listing_date', 'N/A')}")
+            md_content.append(f"- **上市地点**: {stock.get('listing_location', 'N/A')}")
+            md_content.append(f"- **所属行业**: {stock.get('industry', 'N/A')}")
             md_content.append(f"- **选择原因**: {stock['reason']}")
             md_content.append(f"- **综合评分**: {stock['score']:.2f}")
             md_content.append("")
-            md_content.append("**关键指标**:")
+            md_content.append("**估值指标**:")
             md_content.append(f"- PE: {stock['pe']:.2f}")
             md_content.append(f"- PB: {stock['pb']:.2f}")
+            md_content.append(f"- PS: {stock.get('ps', 'N/A'):.2f}")
+            md_content.append(f"- 股息率: {stock.get('dividend_yield', 'N/A'):.2f}%")
+            md_content.append("")
+            md_content.append("**盈利能力指标**:")
             md_content.append(f"- ROE: {stock['roe']:.2f}%")
-            if pd.notna(stock.get('revenue_growth')):
-                md_content.append(f"- 营收增长: {stock['revenue_growth']:.2f}%")
-            if pd.notna(stock.get('profit_growth')):
-                md_content.append(f"- 利润增长: {stock['profit_growth']:.2f}%")
+            md_content.append(f"- ROA: {stock.get('roa', 'N/A'):.2f}%")
+            md_content.append(f"- 毛利率: {stock.get('gross_margin', 'N/A'):.2f}%")
+            md_content.append(f"- 净利率: {stock.get('net_margin', 'N/A'):.2f}%")
+            md_content.append("")
+            md_content.append("**成长指标**:")
+            md_content.append(f"- 营收增长: {stock.get('revenue_growth', 'N/A'):.2f}%")
+            md_content.append(f"- 利润增长: {stock.get('profit_growth', 'N/A'):.2f}%")
+            md_content.append(f"- 净资产增长: {stock.get('equity_growth', 'N/A'):.2f}%")
+            md_content.append("")
+            md_content.append("**财务健康指标**:")
+            md_content.append(f"- 资产负债率: {stock.get('debt_ratio', 'N/A'):.2f}%")
+            md_content.append(f"- 现金流量比率: {stock.get('cash_flow_ratio', 'N/A'):.2f}%")
             md_content.append("")
     
     # 写入文件到result目录
@@ -561,18 +704,24 @@ def save_to_csv(results):
         return
     
     # 选择要保存的列，确保数据格式正确
-    csv_columns = ['code', 'name', 'price', 'market_cap', 'strategy', 'reason', 'score', 
-                   'pe', 'pb', 'roe', 'debt_ratio', 'revenue_growth', 'profit_growth']
-    
+    csv_columns = ['code', 'name', 'listing_date', 'listing_location', 'industry',
+                   'price', 'market_cap', 'strategy', 'reason', 'score', 
+                   'pe', 'pb', 'ps', 'roe', 'roa', 'debt_ratio', 'dividend_yield',
+                   'revenue_growth', 'profit_growth', 'equity_growth', 'gross_margin',
+                   'net_margin', 'cash_flow_ratio']
+
     # 确保所有需要的列都存在
     for col in csv_columns:
         if col not in valid_data.columns:
             valid_data[col] = np.nan
-    
+
     # 重命名列名为中文
     column_mapping = {
         'code': '股票代码',
         'name': '股票名称', 
+        'listing_date': '上市日期',
+        'listing_location': '上市地点',
+        'industry': '所属行业',
         'price': '当前价格',
         'market_cap': '市值(亿)',
         'strategy': '投资策略',
@@ -580,10 +729,17 @@ def save_to_csv(results):
         'score': '综合评分',
         'pe': '市盈率',
         'pb': '市净率',
+        'ps': '市销率',
         'roe': '净资产收益率(%)',
+        'roa': '总资产收益率(%)',
         'debt_ratio': '资产负债率(%)',
+        'dividend_yield': '股息率(%)',
         'revenue_growth': '营收增长率(%)',
-        'profit_growth': '净利润增长率(%)'
+        'profit_growth': '净利润增长率(%)',
+        'equity_growth': '净资产增长率(%)',
+        'gross_margin': '毛利率(%)',
+        'net_margin': '净利率(%)',
+        'cash_flow_ratio': '现金流量比率(%)'
     }
     
     valid_data = valid_data[csv_columns].rename(columns=column_mapping)

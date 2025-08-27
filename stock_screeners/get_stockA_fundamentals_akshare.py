@@ -6,7 +6,6 @@ import os
 import time
 from datetime import datetime
 import warnings
-import akshare as ak
 import random
 import logging
 from requests.adapters import HTTPAdapter
@@ -15,15 +14,8 @@ from requests.packages.urllib3.util.retry import Retry
 # 配置日志
 logging.basicConfig(level=logging.INFO, 
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-                    handlers=[logging.FileHandler("stock_data.log"), logging.StreamHandler()])
-logger = logging.getLogger('stock_data_fetcher')
-
-try:
-    import baostock as bs
-    BAOSTOCK_AVAILABLE = True
-except ImportError:
-    BAOSTOCK_AVAILABLE = False
-    logger.warning("⚠️  baostock库未安装，运行 `pip install baostock` 以启用baostock数据源")
+                    handlers=[logging.FileHandler("stock_data_akshare.log"), logging.StreamHandler()])
+logger = logging.getLogger('stock_data_akshare_fetcher')
 
 # 检查akshare可用性
 try:
@@ -63,16 +55,6 @@ class AntiCrawlConfig:
     # 重试配置
     MAX_RETRIES = 3  # 最大重试次数
     RETRY_BACKOFF_FACTOR = 0.3  # 重试退避因子
-    
-    # 代理配置 (可配置代理IP)
-    USE_PROXY = False
-    PROXIES = {
-        # 'http': 'http://proxy_ip:port',
-        # 'https': 'https://proxy_ip:port',
-    }
-
-# 创建反爬配置实例
-ANTI_CRAWL_CONFIG = AntiCrawlConfig()
 
 # 创建带重试机制的session
 def create_session():
@@ -104,19 +86,16 @@ class RateLimiter:
     
     def reset(self):
         self.request_counts = {
-            'eastmoney': 0,
             'akshare': 0,
-            'baostock': 0
+            'eastmoney': 0
         }
         self.last_reset_times = {
-            'eastmoney': time.time(),
             'akshare': time.time(),
-            'baostock': time.time()
+            'eastmoney': time.time()
         }
         self.rate_limits = {
-            'eastmoney': 50,  # 每分钟最多请求数
-            'akshare': 60,
-            'baostock': 100
+            'akshare': 60,  # 每分钟最多请求数
+            'eastmoney': 50
         }
     
     def check_rate_limit(self, source):
@@ -156,7 +135,7 @@ def get_stock_list():
 
 def load_progress():
     """加载进度信息"""
-    progress_file = 'cache/fundamentals_progress.json'
+    progress_file = 'cache/fundamentals_akshare_progress.json'
     if os.path.exists(progress_file):
         try:
             with open(progress_file, 'r', encoding='utf-8') as f:
@@ -167,256 +146,15 @@ def load_progress():
 
 def save_progress(index, completed_codes):
     """保存进度信息"""
-    progress_file = 'cache/fundamentals_progress.json'
+    progress_file = 'cache/fundamentals_akshare_progress.json'
     try:
         with open(progress_file, 'w', encoding='utf-8') as f:
             json.dump({"last_index": index, "completed_codes": completed_codes}, f, ensure_ascii=False, indent=2)
     except Exception as e:
         print(f"⚠️  保存进度失败: {e}")
 
-def get_fundamentals_from_eastmoney(code):
-    """使用东方财富API获取完整基本面数据，包含反爬机制"""
-    try:
-        # 检查访问频率限制
-        rate_limiter.check_rate_limit('eastmoney')
-        
-        # 创建会话
-        session = create_session()
-        
-        # 随机选择User-Agent和构造请求头
-        headers = {
-            'User-Agent': random.choice(AntiCrawlConfig.USER_AGENTS),
-            'Accept': 'application/json, text/javascript, */*; q=0.01',
-            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-            'Referer': 'https://quote.eastmoney.com/',
-            'X-Requested-With': 'XMLHttpRequest',
-            'Connection': 'keep-alive',
-            'Cache-Control': 'no-cache'
-        }
-        
-        # 东方财富API基础URL
-        base_url = "http://push2.eastmoney.com/api"
-        
-        # 获取股票基本信息
-        url = f"{base_url}/qt/stock/get"
-        params = {
-            'secid': f"0.{code}" if str(code).startswith(('0', '3')) else f"1.{code}",
-            'fields': 'f43,f44,f45,f46,f48,f49,f50,f51,f52,f57,f58,f60,f62,f84,f85,f116,f117,f162,f163,f164,f167,f168,f169,f170,f171,f172,f173,f174,f175,f176,f177,f178,f184,f185,f186,f187,f188,f189,f190,f191,f277'
-        }
-        
-        # 应用代理配置
-        proxies = AntiCrawlConfig.PROXIES if AntiCrawlConfig.USE_PROXY else None
-        
-        # 发送请求获取数据
-        response = session.get(url, params=params, headers=headers, proxies=proxies, timeout=10)
-        
-        # 检查响应状态
-        if response.status_code == 200:
-            data = response.json()
-            
-            if 'data' not in data:
-                logger.warning(f"东方财富API返回数据不完整: {code}")
-                return None
-                
-            stock_data = data['data']
-            
-            # 获取财务数据 - 使用更完整的字段映射
-            try:
-                # 获取详细的财务指标
-                financial_data = {
-                    # 盈利能力指标
-                    '每股收益': stock_data.get('f162', ''),
-                    '每股净资产': stock_data.get('f173', ''),
-                    '净资产收益率': stock_data.get('f177', ''),  # ROE
-                    '总资产收益率': stock_data.get('f178', ''),  # ROA
-                    '毛利率': stock_data.get('f184', ''),
-                    '净利率': stock_data.get('f185', ''),
-                    '营业利润率': stock_data.get('f186', ''),
-                    
-                    # 估值指标
-                    '市盈率（静）': stock_data.get('f163', ''),
-                    '市盈率（TTM）': stock_data.get('f164', ''),
-                    '市净率': stock_data.get('f167', ''),
-                    '市销率': stock_data.get('f168', ''),
-                    '股息率': stock_data.get('f188', ''),
-                    
-                    # 成长性指标
-                    '营业收入增长率': stock_data.get('f190', ''),
-                    '净利润增长率': stock_data.get('f191', ''),
-                    '净资产增长率': stock_data.get('f189', ''),
-                    
-                    # 偿债能力指标
-                    '资产负债率': stock_data.get('f116', ''),
-                    '流动比率': stock_data.get('f277', ''),
-                    
-                    # 运营能力指标
-                    '总资产周转率': stock_data.get('f187', ''),
-                    '存货周转率': stock_data.get('f174', ''),
-                    '应收账款周转率': stock_data.get('f175', ''),
-                    
-                    # 现金流指标
-                    '经营现金流净额': '',
-                    '每股经营现金流': '',
-                    '现金流量比率': ''
-                }
-                
-            except Exception as e:
-                logger.warning(f"获取财务数据时出错: {e}")
-                financial_data = {}
-            
-            # 获取行业和上市信息 - 添加随机延迟
-            try:
-                # 添加随机延迟防止请求过快
-                add_random_delay()
-                
-                # 获取股票详细信息
-                detail_url = "http://emweb.securities.eastmoney.com/PC_HSF10/CoreConception/Index"
-                detail_params = {
-                    'type': 'web',
-                    'code': code,
-                    'rt': str(int(time.time() * 1000))
-                }
-                
-                # 使用不同的请求头
-                detail_headers = headers.copy()
-                detail_headers['Referer'] = f'https://quote.eastmoney.com/{code}.html'
-                
-                # 发送请求获取详细信息
-                detail_response = session.get(detail_url, params=detail_params, headers=detail_headers, proxies=proxies, timeout=10)
-                
-                # 这里简化处理，实际需要从页面解析
-                industry = ''
-                ipo_date = ''
-                
-            except Exception as e:
-                logger.warning(f"获取行业信息失败: {e}")
-                industry = ''
-                ipo_date = ''
-            
-            fundamental = {
-                '股票代码': code,
-                '股票名称': str(stock_data.get('f58', '')).strip(),
-                '股票上市日期': ipo_date,
-                '股票上市地点': '上海' if str(code).startswith(('6', '5')) else '深圳',
-                '股票所属行业': industry,
-                
-                # 盈利能力
-                '每股收益': str(financial_data.get('每股收益', '')).strip(),
-                '每股净资产': str(financial_data.get('每股净资产', '')).strip(),
-                '净资产收益率': str(financial_data.get('净资产收益率', '')).strip(),
-                '总资产收益率': str(financial_data.get('总资产收益率', '')).strip(),
-                '毛利率': str(financial_data.get('毛利率', '')).strip(),
-                '净利率': str(financial_data.get('净利率', '')).strip(),
-                '营业利润率': str(financial_data.get('营业利润率', '')).strip(),
-                
-                # 估值指标
-                '市盈率（静）': str(financial_data.get('市盈率（静）', '')).strip(),
-                '市盈率（TTM）': str(financial_data.get('市盈率（TTM）', '')).strip(),
-                '市净率': str(financial_data.get('市净率', '')).strip(),
-                '市销率': str(financial_data.get('市销率', '')).strip(),
-                '股息率': str(financial_data.get('股息率', '')).strip(),
-                
-                # 成长性
-                '营业收入增长率': str(financial_data.get('营业收入增长率', '')).strip(),
-                '净利润增长率': str(financial_data.get('净利润增长率', '')).strip(),
-                '净资产增长率': str(financial_data.get('净资产增长率', '')).strip(),
-                '净利润增速': str(financial_data.get('净利润增长率', '')).strip(),  # 兼容旧字段
-                
-                # 偿债能力
-                '资产负债率': str(financial_data.get('资产负债率', '')).strip(),
-                '流动比率': str(financial_data.get('流动比率', '')).strip(),
-                
-                # 运营能力
-                '总资产周转率': str(financial_data.get('总资产周转率', '')).strip(),
-                '存货周转率': str(financial_data.get('存货周转率', '')).strip(),
-                '应收账款周转率': str(financial_data.get('应收账款周转率', '')).strip(),
-                
-                # 现金流
-                '每股经营现金流': '',
-                '现金流量比率': ''
-            }
-            
-            return fundamental
-        else:
-            logger.warning(f"东方财富API请求失败，状态码: {response.status_code}, 代码: {code}")
-            return None
-        
-    except requests.exceptions.RequestException as e:
-        logger.error(f"❌ 东方财富网络请求失败: {code} - {str(e)}")
-        return None
-    except Exception as e:
-        logger.error(f"❌ 东方财富API获取 {code} 数据失败: {str(e)}")
-        return None
-
-def get_fundamentals_from_baostock(code):
-    """使用baostock获取财务数据，包含访问控制策略"""
-    if not BAOSTOCK_AVAILABLE:
-        return None
-        
-    try:
-        # 检查访问频率限制
-        rate_limiter.check_rate_limit('baostock')
-        
-        # 登录baostock
-        lg = bs.login()
-        if lg.error_code != '0':
-            logger.error(f"❌ baostock登录失败: {lg.error_msg}")
-            return None
-        
-        # 添加随机延迟，防止请求过快
-        add_random_delay()
-        
-        # 转换股票代码格式（000001 -> sz.000001）
-        market_code = f"sz.{code}" if str(code).startswith(('0', '3')) else f"sh.{code}"
-        
-        # 获取财务数据--季频盈利能力
-        logger.info(f"baostock: market_code-{market_code}")
-        rs = bs.query_profit_data(code=market_code, year=2025, quarter=1)
-        if rs.error_code != '0':
-            logger.error(f"❌ baostock获取 {code} 财务数据失败: {rs.error_msg}")
-            bs.logout()
-            return None
-        
-        # 添加随机延迟
-        add_random_delay()
-        
-        # 获取基本信息
-        rs_list = []
-        while rs.error_code == '0' and rs.next():
-            rs_list.append(rs.get_row_data())
-        
-        if rs_list:
-            data = rs_list[0]
-            fundamental = {
-                '股票代码': code,
-                '股票名称': '',  # 需要单独获取
-                '股票上市日期': '',
-                '股票上市地点': '上海' if str(code).startswith(('6', '5')) else '深圳',
-                '股票所属行业': '',
-                '每股收益': str(data[4]) if len(data) > 4 else '',  # roe
-                '市盈率（静）': '',
-                '市盈率（TTM）': '',
-                '毛利率': '',
-                '净利率': str(data[5]) if len(data) > 5 else '',  # net_profit_ratio
-                '资产收益率': str(data[4]) if len(data) > 4 else '',
-                '资产负债率': '',
-                '净利润增速': ''
-            }
-        else:
-            fundamental = None
-
-        bs.logout()
-        logger.info(f"baostock: {fundamental}")
-        return fundamental
-        
-    except Exception as e:
-        logger.error(f"❌ baostock获取 {code} 数据失败: {str(e)}")
-        if BAOSTOCK_AVAILABLE:
-            bs.logout()
-        return None
-
-def get_fundamentals_from_akshare_full(code):
-    """使用akshare获取完整的财务数据，包含访问控制策略"""
+def get_fundamentals_from_akshare(code):
+    """使用akshare获取股票基本面数据，包含访问控制策略"""
     if not AKSHARE_AVAILABLE:
         return None
     
@@ -591,54 +329,23 @@ def get_fundamentals_from_akshare_full(code):
         logger.error(f"❌ akshare获取 {code} 数据失败: {str(e)}")
         return None
 
-def get_fundamentals_real_data(code, data_source='akshare'):
-    """获取单只股票的真实基本面数据，支持多数据源"""
+def get_fundamentals_real_data(code):
+    """获取单只股票的真实基本面数据"""
     
-    # 数据源优先级：akshare > 东方财富 > baostock
-    data_sources = ['akshare', 'eastmoney', 'baostock']
+    # 使用akshare获取数据
+    result = get_fundamentals_from_akshare(code)
+    if result and result.get('股票名称') and result.get('股票名称') != '':
+        logger.info(f"   ✅ 使用akshare获取 {code} 数据成功")
+        return result
     
-    if data_source != 'auto':
-        data_sources = [data_source] + [ds for ds in data_sources if ds != data_source]
-    
-    for source in data_sources:
-        try:
-            if source == 'akshare':
-                result = get_fundamentals_from_akshare_full(code)
-                if result and result.get('股票名称'):
-                    logger.info(f"   ✅ 使用akshare获取 {code} 数据成功")
-                    return result
-                    
-            elif source == 'eastmoney':
-                result = get_fundamentals_from_eastmoney(code)
-                if result and result.get('股票名称'):
-                    logger.info(f"   ✅ 使用东方财富API获取 {code} 数据成功")
-                    return result
-                    
-            elif source == 'baostock' and BAOSTOCK_AVAILABLE:
-                result = get_fundamentals_from_baostock(code)
-                if result and result.get('股票名称'):
-                    logger.info(f"   ✅ 使用baostock获取 {code} 数据成功")
-                    return result
-        
-        except Exception as e:
-            logger.error(f"   ❌ {source}获取 {code} 数据失败: {str(e)}")
-            
-    # 如果所有数据源都失败，返回空数据
-    logger.warning(f"   ❌ 所有数据源获取 {code} 数据均失败")
+    # 如果所有数据源都失败，返回基本信息
+    logger.warning(f"   ❌ 获取 {code} 数据失败")
     return {
         '股票代码': code,
         '股票名称': '',
         '股票上市日期': '',
         '股票上市地点': '上海' if str(code).startswith(('6', '5')) else '深圳',
-        '股票所属行业': '',
-        '每股收益': '',
-        '市盈率（静）': '',
-        '市盈率（TTM）': '',
-        '毛利率': '',
-        '净利率': '',
-        '资产收益率': '',
-        '资产负债率': '',
-        '净利润增速': ''
+        '股票所属行业': ''
     }
 
 def save_batch_to_csv(batch_data, mode='a'):
@@ -646,7 +353,7 @@ def save_batch_to_csv(batch_data, mode='a'):
     try:
         df = pd.DataFrame(batch_data)
         
-        # 确保数据格式正确 - 包含所有新的财务指标
+        # 确保数据格式正确
         numeric_columns = [
             '每股收益', '每股净资产', '净资产收益率', '总资产收益率', '毛利率', '净利率', '营业利润率',
             '市盈率（静）', '市盈率（TTM）', '市净率', '市销率', '股息率',
@@ -661,29 +368,29 @@ def save_batch_to_csv(batch_data, mode='a'):
                 df[col] = df[col].replace(['', 'None', 'nan'], np.nan)
                 df[col] = pd.to_numeric(df[col], errors='coerce')
         
-        if mode == 'w' or not os.path.exists('cache/stockA_fundamentals.csv'):
-            df.to_csv('cache/stockA_fundamentals.csv', index=False, encoding='utf-8-sig')
+        csv_path = 'cache/stockA_fundamentals_akshare.csv'
+        if mode == 'w' or not os.path.exists(csv_path):
+            df.to_csv(csv_path, index=False, encoding='utf-8-sig')
         else:
-            df.to_csv('cache/stockA_fundamentals.csv', index=False, encoding='utf-8-sig', mode='a', header=False)
+            df.to_csv(csv_path, index=False, encoding='utf-8-sig', mode='a', header=False)
         
         return True
     except Exception as e:
         print(f"❌ 保存批次数据失败: {e}")
         return False
 
-def update_log(stock_count, data_source):
+def update_log(stock_count, status='completed'):
     """更新日志文件"""
     try:
         log_data = {
             "更新时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "股票数量": stock_count,
-            "数据源": data_source,
+            "数据源": "akshare",
+            "状态": status,
             "可用数据源": {
-                "baostock": BAOSTOCK_AVAILABLE,
-                "东方财富API": "可用",
-                "akshare": "可用"
+                "akshare": AKSHARE_AVAILABLE
             },
-            "文件路径": "cache/stockA_fundamentals.csv",
+            "文件路径": "cache/stockA_fundamentals_akshare.csv",
             "包含字段": [
                 "股票代码", "股票名称", "股票上市日期", "股票上市地点", "股票所属行业",
                 # 盈利能力
@@ -698,18 +405,29 @@ def update_log(stock_count, data_source):
                 "总资产周转率", "存货周转率", "应收账款周转率",
                 # 现金流
                 "每股经营现金流", "现金流量比率"
-            ],
-            "财务指标维度": {
-                "盈利能力": ["每股收益", "每股净资产", "净资产收益率", "总资产收益率", "毛利率", "净利率", "营业利润率"],
-                "估值指标": ["市盈率（静）", "市盈率（TTM）", "市净率", "市销率", "股息率"],
-                "成长性": ["营业收入增长率", "净利润增长率", "净资产增长率", "净利润增速"],
-                "偿债能力": ["资产负债率", "流动比率", "速动比率"],
-                "运营能力": ["总资产周转率", "存货周转率", "应收账款周转率"],
-                "现金流": ["每股经营现金流", "现金流量比率"]
-            }
+            ]
         }
         
-        with open('cache/fundamentals_update_log.json', 'w', encoding='utf-8') as f:
+        log_path = 'cache/fundamentals_akshare_update_log.json'
+        # 如果日志文件存在，添加历史记录
+        if os.path.exists(log_path):
+            try:
+                with open(log_path, 'r', encoding='utf-8') as f:
+                    existing_log = json.load(f)
+                if "历史记录" in existing_log:
+                    existing_log["历史记录"].insert(0, log_data)
+                    # 保留最近100条历史记录
+                    if len(existing_log["历史记录"]) > 100:
+                        existing_log["历史记录"] = existing_log["历史记录"][:100]
+                else:
+                    existing_log["历史记录"] = [log_data]
+                log_data = existing_log
+            except Exception as e:
+                logger.warning(f"读取历史日志失败: {e}")
+        else:
+            log_data = {"当前状态": log_data, "历史记录": [log_data]}
+        
+        with open(log_path, 'w', encoding='utf-8') as f:
             json.dump(log_data, f, ensure_ascii=False, indent=2)
         
         return True
@@ -717,25 +435,18 @@ def update_log(stock_count, data_source):
         print(f"❌ 更新日志失败: {e}")
         return False
 
-def main(data_source='auto'):
-    """主函数：获取A股股票完整基本面数据，支持断点续传和多数据源选择
-    
-    Args:
-        data_source: 数据源选择
-            'auto' - 自动选择最佳数据源
-            'baostock' - 仅使用baostock
-            'eastmoney' - 仅使用东方财富API
-            'akshare' - 仅使用akshare
-    """
-    logger.info("🚀 开始获取A股股票完整基本面数据...")
-    logger.info("📊 新增财务指标：ROE、ROA、每股净资产、市净率、股息率、营收增长率等")
-    logger.info(f"📊 数据源: {data_source}")
+def main():
+    """主函数：获取A股股票完整基本面数据，支持断点续传"""
+    logger.info("🚀 开始获取A股股票完整基本面数据 (akshare模式)...")
+    logger.info("📊 财务指标包括：盈利能力、估值指标、成长性、偿债能力、运营能力和现金流")
     
     # 显示可用数据源状态
     logger.info("📡 数据源状态:")
-    logger.info(f"   baostock: {'✅ 可用' if BAOSTOCK_AVAILABLE else '❌ 未安装'}")
-    logger.info(f"   东方财富API: ✅ 可用")
-    logger.info(f"   akshare: ✅ 可用")
+    logger.info(f"   akshare: {'✅ 可用' if AKSHARE_AVAILABLE else '❌ 未安装'}")
+    
+    if not AKSHARE_AVAILABLE:
+        logger.error("❌ 没有可用的数据源，请安装akshare")
+        return
     
     # 获取股票列表
     stock_list = get_stock_list()
@@ -755,6 +466,7 @@ def main(data_source='auto'):
     
     if start_index >= total_stocks:
         logger.info("🎉 所有股票数据已获取完成！")
+        update_log(len(completed_codes))
         return
     
     # 获取待处理的股票
@@ -762,6 +474,7 @@ def main(data_source='auto'):
     
     if not remaining_codes:
         logger.info("🎉 没有需要获取的股票数据")
+        update_log(len(completed_codes))
         return
     
     # 初始化或追加模式
@@ -783,12 +496,15 @@ def main(data_source='auto'):
             # 检查当前批次的总体访问频率
             if i > 0:  # 不是第一批
                 # 根据配置添加批次间延迟
-                batch_delay = random.uniform(ANTI_CRAWL_CONFIG.BATCH_MIN_DELAY, ANTI_CRAWL_CONFIG.BATCH_MAX_DELAY)
+                batch_delay = random.uniform(AntiCrawlConfig.BATCH_MIN_DELAY, AntiCrawlConfig.BATCH_MAX_DELAY)
                 logger.info(f"   ⏱️  批次间延迟: {batch_delay:.2f}秒")
                 time.sleep(batch_delay)
             
             for j, code in enumerate(batch_codes):
-                fundamental = get_fundamentals_real_data(code, data_source)
+                # 设置随机User-Agent
+                headers = {'User-Agent': random.choice(AntiCrawlConfig.USER_AGENTS)}
+                
+                fundamental = get_fundamentals_real_data(code)
                 
                 if fundamental['股票名称'] and fundamental['股票名称'] != '':
                     batch_fundamentals.append(fundamental)
@@ -801,8 +517,7 @@ def main(data_source='auto'):
                     logger.warning(f"   ⚠️  {code} 数据不完整，跳过")
                 
                 # 间隔时间避免请求过快
-                # 注意：每个数据获取函数内部已有add_random_delay()，这里使用较短的固定延迟
-                time.sleep(ANTI_CRAWL_CONFIG.STOCK_MIN_INTERVAL)
+                time.sleep(AntiCrawlConfig.STOCK_MIN_INTERVAL)
             
             # 保存批次数据
             if batch_fundamentals:
@@ -811,21 +526,23 @@ def main(data_source='auto'):
                     save_progress(current_index, list(completed_codes))
                     logger.info(f"   💾 批次数据已保存 ({len(batch_fundamentals)}条记录)")
                     mode = 'a'  # 后续批次使用追加模式
+                    # 保存当前进度到日志
+                    update_log(success_count, status='in_progress')
             else:
                 logger.warning(f"   ⚠️  本批次无有效数据")
         
         # 更新最终日志
-        update_log(success_count, f"multi_source_{data_source}")
+        update_log(success_count)
         
         logger.info(f"\n🎉 数据获取完成！")
         logger.info(f"📊 成功获取 {success_count}/{total_stocks} 只股票的真实数据")
-        logger.info(f"📁 数据已保存到 cache/stockA_fundamentals.csv")
-        logger.info(f"📡 数据源: {data_source}")
-        logger.info(f"📈 数据包含完整财务指标：盈利能力、估值、成长性、偿债能力、运营能力、现金流六大维度")
+        logger.info(f"📁 数据已保存到 cache/stockA_fundamentals_akshare.csv")
+        logger.info(f"📝 更新日志已保存到 cache/fundamentals_akshare_update_log.json")
         
         # 显示统计信息
-        if os.path.exists('cache/stockA_fundamentals.csv'):
-            df = pd.read_csv('cache/stockA_fundamentals.csv')
+        csv_path = 'cache/stockA_fundamentals_akshare.csv'
+        if os.path.exists(csv_path):
+            df = pd.read_csv(csv_path)
             logger.info(f"\n📈 数据统计：")
             logger.info(f"   📊 总记录数: {len(df)}")
             
@@ -844,30 +561,18 @@ def main(data_source='auto'):
                 preview_cols = ['股票代码', '股票名称', '股票所属行业', '每股收益', '净资产收益率', '市盈率（静）', '市净率']
                 available_cols = [col for col in preview_cols if col in valid_data.columns]
                 logger.info(valid_data[available_cols].head().to_string())
-        
+
     except KeyboardInterrupt:
         logger.warning(f"\n⚠️  用户中断，进度已保存")
         logger.warning(f"   已完成 {success_count} 只股票")
-        save_progress(success_count, list(completed_codes))
-        update_log(success_count, f"multi_source_{data_source}")
-    
+        save_progress(start_index + len(remaining_codes[:i+batch_size]), list(completed_codes))
+        update_log(success_count, status='interrupted')
+
     except Exception as e:
         logger.error(f"\n❌ 程序异常: {e}")
         logger.error(f"   已完成 {success_count} 只股票")
-        save_progress(success_count, list(completed_codes))
-        update_log(success_count, f"multi_source_{data_source}")
+        save_progress(start_index + len(remaining_codes[:i+batch_size]), list(completed_codes))
+        update_log(success_count, status='error')
 
 if __name__ == "__main__":
-    import sys
-    
-    # 支持命令行参数选择数据源
-    data_source = 'auto'
-    if len(sys.argv) > 1:
-        source_arg = sys.argv[1].lower()
-        if source_arg in ['baostock', 'eastmoney', 'akshare', 'auto']:
-            data_source = source_arg
-        else:
-            print("⚠️  无效的数据源参数，使用自动模式")
-            print("   可用参数: auto, baostock, eastmoney, akshare")
-    
-    main(data_source=data_source)
+    main()

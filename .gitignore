@@ -183,6 +183,6 @@ cython_debug/
 .DS_Store
 **/.DS_Store
 
-
 stock_screeners/cache/*.json
 stock_screeners/*.json
+**/*.log
