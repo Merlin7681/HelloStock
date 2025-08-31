@@ -1,16 +1,20 @@
 import pandas as pd
 import numpy as np
-import json
 import os
-import time
-from datetime import datetime
-import random
+import sys
+import json
 import logging
+import traceback
+from datetime import datetime
+
+# 确保logs目录存在
+if not os.path.exists('./logs'):
+    os.makedirs('./logs')
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, 
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-                    handlers=[logging.FileHandler("stock_data_baostock.log"), logging.StreamHandler()])
+                    handlers=[logging.FileHandler("./logs/stock_data_baostock.log"), logging.StreamHandler()])
 logger = logging.getLogger('stock_data_baostock_fetcher')
 
 # 检查baostock可用性
@@ -25,84 +29,24 @@ except ImportError:
 if not os.path.exists('cache'):
     os.makedirs('cache')
 
-# 反爬配置
-class AntiCrawlConfig:
-    # 请求延迟配置 (秒)
-    MIN_DELAY = 0.5  # 最小延迟
-    MAX_DELAY = 2.0  # 最大延迟
-    
-    # 批次处理延迟配置 (秒)
-    BATCH_MIN_DELAY = 3.0  # 批次间最小延迟
-    BATCH_MAX_DELAY = 5.0  # 批次间最大延迟
-    
-    # 单只股票处理间隔 (秒)
-    STOCK_MIN_INTERVAL = 0.5  # 股票间最小间隔
-    
-    # 重试配置
-    MAX_RETRIES = 3  # 最大重试次数
-
-# 创建反爬配置实例
-ANTI_CRAWL_CONFIG = AntiCrawlConfig()
-
-# 添加随机延迟
-def add_random_delay(min_delay=None, max_delay=None):
-    min_delay = min_delay or AntiCrawlConfig.MIN_DELAY
-    max_delay = max_delay or AntiCrawlConfig.MAX_DELAY
-    delay = random.uniform(min_delay, max_delay)
-    time.sleep(delay)
-
-# 数据访问控制类
-class RateLimiter:
-    _instance = None
-    
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super(RateLimiter, cls).__new__(cls)
-            cls._instance.reset()
-        return cls._instance
-    
-    def reset(self):
-        self.request_counts = {
-            'baostock': 0
-        }
-        self.last_reset_times = {
-            'baostock': time.time()
-        }
-        self.rate_limits = {
-            'baostock': 100  # 每分钟最多请求数
-        }
-    
-    def check_rate_limit(self, source):
-        current_time = time.time()
-        elapsed = current_time - self.last_reset_times[source]
-        
-        # 每分钟重置计数
-        if elapsed >= 60:
-            self.request_counts[source] = 0
-            self.last_reset_times[source] = current_time
-        
-        # 检查是否超过限制
-        if self.request_counts[source] >= self.rate_limits[source]:
-            wait_time = 60 - elapsed + 1  # 等待到下一分钟再继续
-            logger.warning(f"[{source}] 已达请求限制，等待 {wait_time:.1f} 秒")
-            time.sleep(wait_time)
-            self.request_counts[source] = 0
-            self.last_reset_times[source] = time.time()
-        
-        # 增加计数
-        self.request_counts[source] += 1
-
-# 初始化访问控制器
-rate_limiter = RateLimiter()
+# 重试配置
+MAX_RETRIES = 3  # 最大重试次数
 
 def get_stock_list():
     """从本地文件读取股票列表"""
     try:
+        # 检查cache目录是否存在
+        if not os.path.exists('cache'):
+            os.makedirs('cache')
+            logger.warning("⚠️ cache目录不存在，已创建")
+            
+        # 尝试读取股票列表文件
         stock_list = pd.read_csv('cache/stockA_list.csv')
-        print(f"✅ 成功读取股票列表，共{len(stock_list)}只股票")
+        logger.info(f"✅ 成功读取股票列表，共{len(stock_list)}只股票")
         return stock_list
     except Exception as e:
-        print(f"❌ 读取股票列表失败: {e}")
+        logger.error(f"❌ 读取股票列表失败: {e}")
+        logger.info("💡 请先运行get_stockA_list.py生成股票列表文件")
         return None
 
 def load_progress():
@@ -126,23 +70,17 @@ def save_progress(index, completed_codes):
         print(f"⚠️  保存进度失败: {e}")
 
 def get_fundamentals_from_baostock(code):
-    """使用baostock获取完整的基本面数据，包含访问控制策略"""
+    """使用baostock获取完整的基本面数据"""
     if not BAOSTOCK_AVAILABLE:
         logger.warning("⚠️  baostock库未安装，无法获取数据")
         return None
         
     try:
-        # 检查访问频率限制
-        rate_limiter.check_rate_limit('baostock')
-        
         # 登录baostock
         lg = bs.login()
         if lg.error_code != '0':
             logger.error(f"❌ baostock登录失败: {lg.error_msg}")
             return None
-        
-        # 添加随机延迟，防止请求过快
-        add_random_delay()
         
         # 转换股票代码格式（000001 -> sz.000001）
         market_code = f"sz.{code}" if str(code).startswith(('0', '3')) else f"sh.{code}"
@@ -231,8 +169,7 @@ def get_fundamentals_from_baostock(code):
                         if len(data) > 12:
                             fundamental['每股净资产'] = str(data[12])  # bps
                         
-                        # 添加随机延迟
-                        add_random_delay()
+
                         
                         # 获取资产负债表数据
                         rs_balance = bs.query_balance_data(code=market_code, year=year, quarter=quarter)
@@ -251,8 +188,7 @@ def get_fundamentals_from_baostock(code):
                                     fundamental['流动比率'] = str(current_ratio)
                                     fundamental['速动比率'] = str(quick_ratio)
                         
-                        # 添加随机延迟
-                        add_random_delay()
+
                         
                         # 获取现金流量表数据
                         rs_cash = bs.query_cash_flow_data(code=market_code, year=year, quarter=quarter)
@@ -455,34 +391,25 @@ def main():
             current_end = min(start_index + i + batch_size, total_stocks)
             logger.info(f"\n🔄 处理第{current_start}-{current_end}只股票...")
             
-            # 检查当前批次的总体访问频率
-            if i > 0:  # 不是第一批
-                # 根据配置添加批次间延迟
-                batch_delay = random.uniform(ANTI_CRAWL_CONFIG.BATCH_MIN_DELAY, ANTI_CRAWL_CONFIG.BATCH_MAX_DELAY)
-                logger.info(f"   ⏱️  批次间延迟: {batch_delay:.2f}秒")
-                time.sleep(batch_delay)
+
             
             for j, code in enumerate(batch_codes):
-                # 重试机制
-                retry_count = 0
-                while retry_count < AntiCrawlConfig.MAX_RETRIES:
-                    fundamental = get_fundamentals_from_baostock(code)
-                    if fundamental:
-                        break
-                    retry_count += 1
-                    logger.warning(f"   🔄 重试获取 {code} 数据 ({retry_count}/{AntiCrawlConfig.MAX_RETRIES})")
-                    time.sleep(random.uniform(2, 5))  # 重试前增加较长延迟
-                
-                if fundamental and fundamental['股票名称']:
-                    batch_fundamentals.append(fundamental)
-                    success_count += 1
-                    completed_codes.add(code)
-                else:
-                    logger.warning(f"   ⚠️  {code} 数据获取失败或不完整，跳过")
-                
-                # 间隔时间避免请求过快
-                time.sleep(ANTI_CRAWL_CONFIG.STOCK_MIN_INTERVAL)
-            
+                  # 重试机制
+                  retry_count = 0
+                  while retry_count < MAX_RETRIES:
+                      fundamental = get_fundamentals_from_baostock(code)
+                      if fundamental:
+                          break
+                      retry_count += 1
+                      logger.warning(f"   🔄 重试获取 {code} 数据 ({retry_count}/{MAX_RETRIES})")
+                  
+                  if fundamental and fundamental['股票名称']:
+                      batch_fundamentals.append(fundamental)
+                      success_count += 1
+                      completed_codes.add(code)
+                  else:
+                      logger.warning(f"   ⚠️  {code} 数据获取失败或不完整，跳过")
+              
             # 保存批次数据
             if batch_fundamentals:
                 if save_batch_to_csv(batch_fundamentals, mode):

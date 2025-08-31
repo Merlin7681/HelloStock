@@ -1,21 +1,25 @@
 import pandas as pd
 import numpy as np
-import requests
-import json
 import os
+import sys
+import json
 import time
-from datetime import datetime
-import warnings
-import akshare as ak
 import random
 import logging
+import traceback
+from datetime import datetime
+import requests
 from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
+
+# 确保logs目录存在
+if not os.path.exists('logs'):
+    os.makedirs('logs')
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, 
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-                    handlers=[logging.FileHandler("stock_data.log"), logging.StreamHandler()])
+                    handlers=[logging.FileHandler("logs/stock_data.log"), logging.StreamHandler()])
 logger = logging.getLogger('stock_data_fetcher')
 
 try:

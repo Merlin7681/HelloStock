@@ -5,7 +5,7 @@
 
 功能：
 1. 获取A股全部真实股票列表（包含股票名称、股票代码和行业）
-2. 保存到本地文件：stock_screeners/cache/stockA_list.csv
+2. 保存到本地文件：cache/stockA_list.csv
 3. 包含完整信息：股票代码、股票名称、所属行业、市场类型
 
 使用方法：
