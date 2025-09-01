@@ -98,11 +98,13 @@ eastmoney接口访问添加反爬机制：包括访问频率控制、随机User-
 将分析筛选策略和筛选结果存到本地存入stock_screeners/result目录下的result_selected_eastmoney.csv和result_selected_eastmoney.md文件中。并将选中的股票代码和股票名称存入stock_screeners/result/result_selected_eastmoney.json中。程序名为stock_screeners/stock_screeners_eastmoney.py
 
 #### 1.4.2、基于baostock数据源
+**策略一：**
 根据从baostock获取的基本面数据（保存在stock_screeners/cache/stockA_fundamentals_baostock.csv，其中的值字段为空时，请忽略）。进行策略分析和筛选，以获得优质股票（如发现现价价值被低估的股票）。
 根据分析结果，筛选出符合条件的股票，得到20-50支优质股票。
 将分析筛选策略和筛选结果存到本地存入stock_screeners/result目录下的result_selected_baostock.csv和result_selected_baostock.md文件中。并将选中的股票代码和股票名称存入stock_screeners/result/result_selected_baostock.json中。程序名为stock_screeners/stock_screeners_baostock.py
 不要参考stock_screeners/目录中已有的代码。
 
+**策略二：**
 请参考”docs/用 Baostock 通过基本面分析筛选优质股.md“中的说明，并对优质股选择策略进行适当优化，并生成一个选择优质股的程序stock_screeners/stock_screeners_baostock.py文件。
 股票选择范围包括A股的所有股票。
 baostock 平台介绍：
@@ -110,6 +112,7 @@ baostock 平台介绍：
 - http://baostock.com/baostock/index.php/%E5%85%AC%E5%BC%8F%E4%B8%8E%E6%95%B0%E6%8D%AE%E6%A0%BC%E5%BC%8F%E8%AF%B4%E6%98%8E
 baostock Python API文档可以参考：http://baostock.com/baostock/index.php/Python_API%E6%96%87%E6%A1%A3
 根据分析结果，筛选出符合条件的股票，得到20-50支优质股票。
+即使获取不到数据源的数据，也不要使用模拟数据。
 将分析筛选策略和筛选结果存到本地存入stock_screeners/result目录下的result_selected_baostock.csv和result_selected_baostock.md文件中。并将选中的股票代码和股票名称存入stock_screeners/result/result_selected_baostock.json中。
 不要参考stock_screeners/目录中已有的代码。
 不必参考stock_screeners/cache/stockA_fundamentals_baostock.csv数据。
