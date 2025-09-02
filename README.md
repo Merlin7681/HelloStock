@@ -133,6 +133,7 @@ baostock Python API文档可以参考：http://baostock.com/baostock/index.php/P
 - ...
 
 ## 参考
+- [BaoStock Python API文档](http://baostock.com/baostock/index.php/Python_API%E6%96%87%E6%A1%A3)
 - [Python破解东方财富反爬机制](https://cloud.tencent.com/developer/article/2542891)
 
 
