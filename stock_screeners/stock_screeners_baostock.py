@@ -14,7 +14,8 @@ import json
 
 class StockScreener:
     def __init__(self, cache_interval=50):
-        self.now_date = "2025-07-30"
+        # 最近的交易日
+        self.now_date = self._get_latest_trading_day()
         # 暂不设置查询日期，将在登录后设置
         self.query_date = None
         # 设置目标年份（近3年）
@@ -51,30 +52,26 @@ class StockScreener:
             start_date = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
             end_date = datetime.now().strftime('%Y-%m-%d')
             rs = bs.query_trade_dates(start_date=start_date, end_date=end_date)
-            if rs.error_code != '0':
-                print(f"获取交易日期失败：{rs.error_msg}")
-                # 失败时使用备用方案
-                today = datetime.now()
-                if today.weekday() >= 5:  # 周六或周日
-                    days_to_subtract = 1 if today.weekday() == 5 else 2
-                    return (today - timedelta(days=days_to_subtract)).strftime('%Y-%m-%d')
-                else:
-                    return (today - timedelta(days=1)).strftime('%Y-%m-%d')
-
-            df = rs.get_data()
+            
+            # 获取查询结果
+            trade_dates = rs.get_data()
+            
+            # 转换is_trading_day列为整数类型
+            try:
+                trade_dates['is_trading_day'] = trade_dates['is_trading_day'].astype(int)
+            except ValueError:
+                print("警告：无法将is_trading_day列转换为整数类型")
+                return ""
             # 筛选出已过的交易日
-            df['is_trading_day'] = df['is_trading_day'].astype(bool)
-            past_trading_days = df[(df['calendar_date'] <= end_date) & df['is_trading_day']]
-            if past_trading_days.empty:
-                print("未找到过去的交易日数据")
-                # 备用方案
-                today = datetime.now()
-                return (today - timedelta(days=1)).strftime('%Y-%m-%d')
-
-            # 返回最近的交易日
-            latest_trading_day = past_trading_days.iloc[-1]['calendar_date']
-            print(f"获取到最近的交易日：{latest_trading_day}")
-            return latest_trading_day
+            trading_days = trade_dates[trade_dates['is_trading_day'] == 1]
+            trading_days_sorted = trading_days.sort_values('calendar_date', ascending=False)
+            
+            # 如果有交易日数据，返回最近的1个交易日
+            if not trading_days_sorted.empty:
+                return trading_days_sorted.iloc[0]['calendar_date']
+            else:
+                print("未找到交易日数据")
+                return ""
         except Exception as e:
             print(f"获取交易日时出错：{e}")
             # 异常时使用备用方案
@@ -166,6 +163,7 @@ class StockScreener:
         # 查询所有股票
         current_date = self.now_date
         stock_rs = bs.query_all_stock(current_date)
+        print(f"查询所有股票，日期：{current_date}\n{stock_rs}")
         if stock_rs.error_code != '0':
             print(f"查询所有股票失败: {stock_rs.error_msg}")
             return []
@@ -474,7 +472,7 @@ class StockScreener:
 
                 print(f"正在获取批次{i//batch_size + 1}的估值数据，股票代码示例：{valid_batch_codes[:3]}")
 
-                # 使用固定日期查询，参考helloworld.py的成功经验
+                # 使用固定日期查询
                 query_date = self.now_date
                 print(f"查询日期: {query_date}")
                 
@@ -487,7 +485,7 @@ class StockScreener:
                         try:
                             rs = bs.query_history_k_data_plus(
                                 code,
-                                "date,code,peTTM,pctChg",
+                                "date,code,peTTM,pctChg,turn,pbMRQ",
                                 start_date=query_date,
                                 end_date=query_date,
                                 frequency="d",
@@ -513,17 +511,21 @@ class StockScreener:
                                     code = row_data[1]
                                     pe_ttm = row_data[2]
                                     pct_chg = row_data[3]
+                                    turn = row_data[4] # 换手率
+                                    pbMRQ = row_data[5] # 市净率
 
                                     # 从股票名称字典中获取名称
                                     name = self.stock_name_dict.get(code, f'股票{code}')
-                                    print(f"处理后: 代码={code}, 名称={name}, peTTM={pe_ttm}")  # 添加打印语句检查处理后的数据
+                                    print(f"处理后: 代码={code}, 名称={name}, peTTM={pe_ttm}, pctChg={pct_chg}, turn={turn}, pbMRQ={pbMRQ}")  # 添加打印语句检查处理后的数据
 
                                     try:
                                         batch_valuation_data.append({
                                             '股票代码': code,
                                             '股票名称': name,
                                             'peTTM': float(pe_ttm) if pe_ttm and pe_ttm != 'null' else np.nan,
-                                            'pctChg': float(pct_chg) if pct_chg and pct_chg != 'null' else np.nan
+                                            'pctChg': float(pct_chg) if pct_chg and pct_chg != 'null' else np.nan,
+                                            'turn': float(turn) if turn and turn != 'null' else np.nan,
+                                            'pbMRQ': float(pbMRQ) if pbMRQ and pbMRQ != 'null' else np.nan
                                         })
                                     except Exception as e:
                                         print(f"处理数据行时出错: {e}")
@@ -608,7 +610,10 @@ class StockScreener:
             (final_df['peTTM'] > 0) & (final_df['peTTM'] < 80) &
             (final_df['ROE(%)'] > 10) &
             (final_df['毛利率(%)'] > 20) &
-            (final_df['流动比率'] > 1.0)
+            (final_df['流动比率'] > 1.0) &
+            (final_df['pbMRQ'] < 1.5) &
+            #(final_df['pctChg'] > 0) &
+            (final_df['turn'] > 0.5)
             # 暂时移除股息率条件，因为估值数据中没有这个字段
         )
         
@@ -637,7 +642,7 @@ class StockScreener:
                 ultra_relaxed_df = ultra_relaxed_df.sort_values('ROE(%)', ascending=False).reset_index(drop=True)
                 high_quality_df = ultra_relaxed_df
         
-        # 如果仍没有结果，按ROE排序取前Head只股票
+        # 如果仍没有结果，按ROE排序取前N只股票
         headStock = 15
         if high_quality_df.empty:
             print("所有筛选条件均未匹配到股票，按ROE排序取前15只")

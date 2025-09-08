@@ -11,6 +11,8 @@ import numpy as np
 from datetime import datetime, timedelta
 import warnings
 warnings.filterwarnings('ignore')
+from print_info import print_info
+from base_info import get_stock_name_by_code, get_stock_pe_pb
 
 class StockRecommendation:
     """股票投注推荐系统"""
@@ -20,9 +22,10 @@ class StockRecommendation:
         self.stock_name = ""
         self.current_price = 0
         self.analysis_data = {}
+        self.is_print = True
         
     def get_stock_basic_info(self):
-        """获取股票基本信息，增强容错和重试机制"""
+        """获取股票基本信息（两项--股票名称+最新价，实时->历史），增强容错和重试机制"""
         max_retries = 3
         retry_delay = 2  # 秒
         
@@ -30,6 +33,7 @@ class StockRecommendation:
             try:
                 print(f"📡 尝试获取股票信息 (第{attempt+1}次)...")
                 
+                print_info(True, "获取股票实时行情（最新价）", "尝试中......")
                 # 方法1: 东方财富实时行情
                 try:
                     stock_info = ak.stock_zh_a_spot_em()
@@ -57,6 +61,7 @@ class StockRecommendation:
                 except:
                     pass
                 
+                print_info(True, "获取股票历史数据（昨日收盘价）", "尝试中......")
                 # 方法3: 历史数据（昨日收盘价）
                 try:
                     hist_data = ak.stock_zh_a_hist(
@@ -67,7 +72,7 @@ class StockRecommendation:
                     )
                     if not hist_data.empty:
                         self.current_price = float(hist_data.iloc[-1]['收盘'])
-                        self.stock_name = self.get_stock_name_by_code()
+                        self.stock_name = get_stock_name_by_code(self.stock_code)
                         print(f"✅ 成功获取历史数据: {self.stock_name} ¥{self.current_price}")
                         return True
                 except:
@@ -85,24 +90,7 @@ class StockRecommendation:
         
         return False
     
-    def get_stock_name_by_code(self):
-        """根据股票代码获取股票名称"""
-        stock_names = {
-            '000001': '平安银行',
-            '000002': '万科A',
-            '000858': '五粮液',
-            '002594': '比亚迪',
-            '300750': '宁德时代',
-            '600519': '贵州茅台',
-            '600036': '招商银行',
-            '601318': '中国平安',
-            '601398': '工商银行',
-            '000333': '美的集团',
-        }
-        return stock_names.get(self.stock_code, f"股票{self.stock_code}")
-    
 
-    
     def get_technical_indicators(self):
         """计算技术指标，增强容错机制"""
         max_retries = 3
@@ -123,14 +111,17 @@ class StockRecommendation:
                     end_date=end_date.strftime('%Y%m%d'),
                     adjust=""
                 )
-                
+                print_info(self.is_print, "获取到的每日行情", hist_data)
+
                 if hist_data.empty:
                     raise ValueError("历史数据为空")
                 
                 # 计算技术指标
                 df = hist_data.copy()
                 df = df.sort_values('日期')
-                
+                print_info(self.is_print, "获取到的sorted历史数据", df)
+
+
                 # 确保有足够数据
                 if len(df) < 20:
                     # 使用简化计算
@@ -138,37 +129,55 @@ class StockRecommendation:
                 
                 # 移动平均线
                 df['MA5'] = df['收盘'].rolling(window=min(5, len(df))).mean()
+                print_info(self.is_print, "获取到的MA5数据", df['MA5'])
                 df['MA10'] = df['收盘'].rolling(window=min(10, len(df))).mean()
                 df['MA20'] = df['收盘'].rolling(window=min(20, len(df))).mean()
                 df['MA60'] = df['收盘'].rolling(window=min(60, len(df))).mean()
                 
                 # RSI
                 delta = df['收盘'].diff()
+                print_info(self.is_print, "获取到的delta数据", delta)
+                
                 gain = (delta.where(delta > 0, 0)).rolling(window=min(14, len(df))).mean()
+                print_info(self.is_print, "获取到的gain数据", gain)
                 loss = (-delta.where(delta < 0, 0)).rolling(window=min(14, len(df))).mean()
+                print_info(self.is_print, "获取到的loss数据", loss)
                 rs = np.where(loss != 0, gain / loss, 1)
+                print_info(self.is_print, "获取到的rs数据", rs)
                 df['RSI'] = 100 - (100 / (1 + rs))
+                print_info(self.is_print, "获取到的RSI数据", df['RSI'])
                 
                 # MACD
+                # pandas 库中用于计算指数加权移动平均（Exponential Weighted Moving Average，EWMA）
                 exp1 = df['收盘'].ewm(span=12, adjust=False).mean()
+                print_info(self.is_print, "获取到的exp1数据", exp1)
                 exp2 = df['收盘'].ewm(span=26, adjust=False).mean()
                 df['MACD'] = exp1 - exp2
+                print_info(self.is_print, "获取到的MACD数据", df['MACD'])
                 df['MACD_signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
-                
+                print_info(self.is_print, "获取到的MACD_signal数据", df['MACD_signal'])
+
                 # 布林带
                 rolling_std = df['收盘'].rolling(window=min(20, len(df))).std()
                 df['BB_upper'] = df['MA20'] + (rolling_std * 2)
                 df['BB_lower'] = df['MA20'] - (rolling_std * 2)
                 
                 # 波动率
+                # pct_change() ：是pandas的一个Series方法，用于计算当前元素与上一个元素之间的百分比变化
                 returns = df['收盘'].pct_change()
+                # std() ：计算每个滚动窗口内收益率的标准差，衡量收益率的分散程度
                 df['volatility'] = returns.rolling(window=min(20, len(df))).std() * np.sqrt(252)
+                print_info(self.is_print, "获取到的volatility(波动率)数据", df['volatility'])
                 
                 # 成交量指标
                 df['volume_ma'] = df['成交量'].rolling(window=min(10, len(df))).mean()
+                print_info(self.is_print, "获取到的volume_ma（成交量移动平均）数据", df['volume_ma'])
                 df['volume_ratio'] = np.where(df['volume_ma'] != 0, df['成交量'] / df['volume_ma'], 1)
+                print_info(self.is_print, "获取到的volume_ratio（成交量比）数据", df['volume_ratio'])
                 
+                # df.iloc[-1] 是 pandas 库中用于数据索引的操作，用于获取 DataFrame 的最后一行数据。
                 latest = df.iloc[-1]
+                print_info(self.is_print, "NOTE: 最近一天的技术指标数据", latest)
                 print(f"✅ 技术指标计算完成")
                 return latest
                 
@@ -183,7 +192,8 @@ class StockRecommendation:
         return None
     
     def get_simplified_indicators(self, df):
-        """简化版技术指标计算"""
+        """简化版技术指标计算（表明分析结果基本无效！）"""
+        print_info(True, "WARN：", "由于数据不全，由简化版技术指标替代，本次分析没有参考意义！")
         latest = df.iloc[-1]
         return pd.Series({
             'MA5': df['收盘'].iloc[-5:].mean() if len(df) >= 5 else latest['收盘'],
@@ -201,18 +211,26 @@ class StockRecommendation:
         })
     
 
-    
     def get_fundamental_analysis(self):
-        """基本面分析"""
+        """基本面分析（'市盈率pe','市净率pb', '净资产收益率roe','资产负债率debt_ratio','营业总收入同比增长率revenue_growth','#净利润增长率profit_growth'，'净利润同比增长率profit_growth'）"""
+                
         try:
+            # NOTE： 对于更实时的财务指标数据，可考虑使用其他AKShare提供的接口，如 stock_financial_analysis_indicator
+            # realtime_data = ak.stock_financial_analysis_indicator(symbol=self.stock_code, start_year="2025")
+            # print_info(self.is_print, "获取到的财务数据（实时--暂未使用！）", realtime_data)
+
             # 获取财务数据 - 使用同花顺财务摘要
+            # finance_data = ak.stock_financial_abstract_ths(symbol=self.stock_code, indicator='按单季度')
             finance_data = ak.stock_financial_abstract_ths(symbol=self.stock_code)
+            #print_info(self.is_print, "获取到的财务数据（全部）", finance_data)
             
             if finance_data.empty:
                 return None
             
             # 获取最新数据
-            latest_data = finance_data.iloc[0]
+            # latest_data = finance_data.iloc[0]
+            latest_data = finance_data.iloc[-1]
+            print_info(self.is_print, "获取到的财务数据（最近一次）", latest_data)
             
             # 关键指标映射
             column_mapping = {
@@ -221,7 +239,9 @@ class StockRecommendation:
                 '净资产收益率': 'roe',
                 '资产负债率': 'debt_ratio',
                 '营业总收入同比增长率': 'revenue_growth',
-                '净利润增长率': 'profit_growth'
+                #'净利润增长率': 'profit_growth'，
+                # 依照latest_data数据调整 
+                '净利润同比增长率': 'profit_growth'
             }
             
             fundamentals = {}
@@ -240,6 +260,18 @@ class StockRecommendation:
                 else:
                     fundamentals[english_key] = 0
             
+            # 补充pe/pb数据
+            #cur_date = (datetime.now()).strftime('%Y-%m-%d')
+            print(".................before......................")
+            result = get_stock_pe_pb(self.stock_code)
+            if(result is None):
+                # 如果获取不到最新交易日的数据（query_history_k_data_plus 日），则取上一个交易日数据
+                result = get_stock_pe_pb(self.stock_code, 1)
+            print_info(self.is_print, "PE/PB", result)
+            fundamentals['pe'] = float(result[0]['peTTM'])
+            fundamentals['pb'] = float(result[0]['pbMRQ'])
+            
+            print_info(self.is_print, "获取到的基本面数据(按报告期)", fundamentals)
             return fundamentals
             
         except Exception as e:
